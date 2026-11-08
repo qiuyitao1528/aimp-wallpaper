@@ -64,10 +64,13 @@ class VisPanel:
         self._items_bar, self._items_pk = [], []
         for x, w in self._layout:
             self._items_bar.append(self.canvas.create_rectangle(x, cy0, x + w, cy0,
-                                                                fill=_BAR, outline="", width=0))
+                                                                fill=_BAR, outline="", width=0,
+                                                                state="hidden"))
             self._items_pk.append((
-                self.canvas.create_rectangle(x, cy0, x + w, cy0, fill=_PEAK, outline="", width=0),
-                self.canvas.create_rectangle(x, cy0, x + w, cy0, fill=_PEAK, outline="", width=0)))
+                self.canvas.create_rectangle(x, cy0, x + w, cy0, fill=_PEAK, outline="", width=0,
+                                             state="hidden"),
+                self.canvas.create_rectangle(x, cy0, x + w, cy0, fill=_PEAK, outline="", width=0,
+                                             state="hidden")))
         self._disp = np.zeros(self.n_bands)          # UI 层包络值
         self._peaks = np.zeros(self.n_bands)
         self._geom = np.zeros((self.n_bands, 2), dtype=int)  # [h, p] 整数缓存，未变不重绘
@@ -249,19 +252,31 @@ class VisPanel:
         for i, (x, w) in enumerate(self._layout):
             h = int(min(1.0, max(0.0, float(self._disp[i]))) * ymax)
             self._peaks[i] = max(self._peaks[i] * 0.994 - 0.0006, h / max(1, ymax))
-            pi = int(self._peaks[i] * ymax)  # 不做下限钳制：无声列峰值帽归零不显示
-            if geom[i, 0] != h:  # 中轴对称：向上向下各伸展 h
-                geom[i, 0] = h
-                if h >= 1:
+            pi = int(self._peaks[i] * ymax)  # 不做下限钳制：无声列完全隐藏
+            if h >= 1:  # 中轴对称：向上向下各伸展 h
+                if geom[i, 0] <= 0:
+                    c.itemconfig(self._items_bar[i], state="normal")
+                    geom[i, 0] = h
                     c.coords(self._items_bar[i], x, cy - h, x + w, cy + h)
-                else:
-                    c.coords(self._items_bar[i], x, cy, x + w, cy)
-            if geom[i, 1] != pi:  # 点状峰值帽（无声列塌缩为中轴零尺寸=不可见）
-                geom[i, 1] = pi
-                if pi >= 1:
+                elif geom[i, 0] != h:
+                    geom[i, 0] = h
+                    c.coords(self._items_bar[i], x, cy - h, x + w, cy + h)
+            elif geom[i, 0] > 0:
+                geom[i, 0] = 0
+                c.itemconfig(self._items_bar[i], state="hidden")  # 零尺寸矩形会画成 1px 线，必须隐藏
+            if pi >= 1:  # 点状峰值帽
+                if geom[i, 1] <= 0:
+                    c.itemconfig(self._items_pk[i][0], state="normal")
+                    c.itemconfig(self._items_pk[i][1], state="normal")
+                    geom[i, 1] = pi
                     c.coords(self._items_pk[i][0], x, cy - pi - dot_h, x + w, cy - pi)
                     c.coords(self._items_pk[i][1], x, cy + pi, x + w, cy + pi + dot_h)
-                else:
-                    c.coords(self._items_pk[i][0], x, cy, x + w, cy)
-                    c.coords(self._items_pk[i][1], x, cy, x + w, cy)
+                elif geom[i, 1] != pi:
+                    geom[i, 1] = pi
+                    c.coords(self._items_pk[i][0], x, cy - pi - dot_h, x + w, cy - pi)
+                    c.coords(self._items_pk[i][1], x, cy + pi, x + w, cy + pi + dot_h)
+            elif geom[i, 1] > 0:
+                geom[i, 1] = 0
+                c.itemconfig(self._items_pk[i][0], state="hidden")
+                c.itemconfig(self._items_pk[i][1], state="hidden")
         self.win.after(16, self._frame)

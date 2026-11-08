@@ -46,7 +46,8 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
     def render(cover, meta, why: str) -> bool:
         try:
             paths = wallpaper.render_and_apply(cover, meta, cfg, wallpaper.get_monitors())
-            applog.log(f"[{why}] 已更新 {len(paths)} 屏")
+            applog.log(f"[{why}] 已更新 {len(paths)} 屏 "
+                       f"字体: {cfg.get('title_font_file') or '默认'}/{cfg.get('sub_font_file') or '默认'}")
             return True
         except Exception:
             applog.log_exc(f"[{why}] 渲染失败:\n", *sys.exc_info())  # 失败不拖垮主程序
