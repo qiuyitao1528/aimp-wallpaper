@@ -44,6 +44,7 @@ user32.SystemParametersInfoW.restype = wintypes.BOOL
 user32.SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT, c_void_p, wintypes.UINT]
 
 GA_ROOT = 2
+GW_HWNDPREV = 3
 GWL_EXSTYLE = -20
 WS_EX_LAYERED = 0x00080000
 WS_EX_TOOLWINDOW = 0x00000080

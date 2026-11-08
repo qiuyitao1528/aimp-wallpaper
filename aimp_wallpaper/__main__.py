@@ -119,6 +119,8 @@ def main():
 
     applog.log("启动")
     sys.excepthook = lambda t, v, tb: applog.log_exc("未捕获异常:\n", t, v, tb)
+    import gc
+    gc.set_threshold(50_000, 100, 100)  # 动画循环：降低 GC 频率防微卡顿
 
     _set_dpi_aware()
     ipc = AimpIPC()
@@ -202,6 +204,7 @@ def main():
     tray = Tray(root, on_settings=open_settings, on_toggle_vis=toggle_vis,
                 on_restore=restore_wp, on_quit=_quit_app)
     atexit.register(lambda: tray.stop())  # 崩溃退出时兜底收托盘图标
+    gc.freeze()  # 启动期对象移入永久代，进一步降低运行期 GC 成本
     applog.log("进入 mainloop")
     try:
         root.mainloop()

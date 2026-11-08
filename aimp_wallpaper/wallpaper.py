@@ -79,7 +79,7 @@ _STYLE_WORDS = {"regular", "bold", "light", "medium", "heavy", "black", "italic"
 _FONT_ENTRIES: list[tuple[str, str]] | None = None  # [(注册标签, 文件名/全路径)]
 
 
-def _font_entries() -> list[tuple[str, str]]:
+def font_entries() -> list[tuple[str, str]]:
     """注册表枚举已装字体（进程内缓存一次）。"""
     global _FONT_ENTRIES
     if _FONT_ENTRIES is not None:
@@ -118,14 +118,14 @@ def _bold_variant(font_file: str) -> str | None:
         return cache[font_file]
     result = None
     base = os.path.basename(font_file).lower()
-    for label, fname in _font_entries():
+    for label, fname in font_entries():
         if os.path.basename(fname).lower() == base:
             family = " ".join(w for w in label.split() if w.lower().strip("-") not in _STYLE_WORDS)
             break
     else:
         family = None
     if family:
-        for label, fname in _font_entries():
+        for label, fname in font_entries():
             if fname == font_file:
                 continue
             low = label.lower()
@@ -164,15 +164,6 @@ def _load_font(bold: bool, size: int, font_file: str | None = None) -> tuple[Ima
         except OSError:
             continue
     return ImageFont.load_default(size), False
-
-
-def _cover_fit(im: Image.Image, w: int, h: int) -> Image.Image:
-    """等比放大铺满再居中裁剪。"""
-    im = im.convert("RGB")
-    scale = max(w / im.width, h / im.height)
-    im = im.resize((max(w, int(im.width * scale + 0.5)), max(h, int(im.height * scale + 0.5))), Image.LANCZOS)
-    x, y = (im.width - w) // 2, (im.height - h) // 2
-    return im.crop((x, y, x + w, y + h))
 
 
 def _blur_bg(cover: Image.Image | None, w: int, h: int, cfg: dict) -> Image.Image:

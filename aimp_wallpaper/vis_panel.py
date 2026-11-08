@@ -11,6 +11,9 @@
 """
 from __future__ import annotations
 
+import json
+import os
+import time
 import tkinter as tk
 from ctypes import byref
 
@@ -18,6 +21,12 @@ import numpy as np
 
 from . import config, desktop
 from .audio_spectrum import Spectrum
+
+FRAME_MS = 33   # 30fps：频谱数据本身 ~23Hz，30fps 已平滑且 CPU/桌面合成减半
+BAR_FALL = 0.81     # 条衰减系数/帧（30fps，等效旧 60fps 的 0.90）
+PEAK_FALL = 0.99    # 峰值帽衰减系数/帧
+PEAK_DROP = 0.0024  # 峰值帽线性下坠/帧
+BLUR_KEEP = 0.6     # 动态模糊：显示态保留权重（帧融合，掩盖偶发掉帧跳变）
 
 _BAR = "#FFFFFF"
 _PEAK = "#FFFFFF"
@@ -72,8 +81,11 @@ class VisPanel:
                 self.canvas.create_rectangle(x, cy0, x + w, cy0, fill=_PEAK, outline="", width=0,
                                              state="hidden")))
         self._disp = np.zeros(self.n_bands)          # UI 层包络值
+        self._shown = np.zeros(self.n_bands)         # 动态模糊后的显示值
         self._peaks = np.zeros(self.n_bands)
         self._geom = np.zeros((self.n_bands, 2), dtype=int)  # [h, p] 整数缓存，未变不重绘
+        self._anchor_cache = None
+        self._anchor_cache_mtime = None
         self._drag = None
         self._tick_n = 0
 
@@ -104,28 +116,35 @@ class VisPanel:
     # ---------- 桌面级 z-order ----------
 
     def _seat_above_desktop(self):
-        """把 Progman 压到本窗口之下（壁纸之上、普通窗口之下）；顺带处理被最小化。"""
+        """把 Progman 压到本窗口下方（壁纸之上、普通窗口之下）；顺带处理被最小化。
+        z-order 已正确时零跨进程写操作（GetWindow 是无阻塞查询），explorer 忙也不会卡 UI。"""
         if desktop.user32.IsIconic(self._hwnd):
             desktop.user32.ShowWindow(self._hwnd, 4)  # SW_SHOWNOACTIVATE
         progman = desktop.user32.FindWindowW("Progman", None)
-        if progman:
+        if progman and desktop.user32.GetWindow(progman, desktop.GW_HWNDPREV) != self._hwnd:
             desktop.user32.SetWindowPos(progman, self._hwnd, 0, 0, 0, 0,
                                         0x2 | 0x1 | 0x10)  # NOMOVE|NOSIZE|NOACTIVATE
 
     # ---------- 位置/拖动 ----------
 
     def _anchor_pos(self):
-        """跟随壁纸排版：读渲染锚点（专辑行底部），失败返回 None。"""
-        import json
-        import os
+        """跟随壁纸排版：读渲染锚点（专辑行底部），mtime 未变时走缓存。失败返回 None。"""
         p = os.path.join(self.cfg["output_dir"], "vis_anchor.json")
         try:
-            st = os.stat(p)
+            mtime = os.stat(p).st_mtime
+        except OSError:
+            return None, 0
+        if mtime == self._anchor_cache_mtime:
+            return self._anchor_cache, mtime
+        try:
             with open(p, "r", encoding="utf-8") as f:
                 d = json.load(f)
-            return (int(d["x"]), int(d["y"])), st.st_mtime
+            pos = (int(d["x"]), int(d["y"]))
         except (OSError, ValueError, KeyError):
-            return None, 0
+            pos = None
+        self._anchor_cache_mtime = mtime
+        self._anchor_cache = pos
+        return pos, mtime
 
     def _auto_pos(self):
         """自动模式：优先锚点（专辑名正下方再留一档间距），否则右下角兜底。"""
@@ -228,12 +247,13 @@ class VisPanel:
     # ---------- 绘制循环：均匀条 + 中轴对称 + 点状峰值 ----------
 
     def _frame(self):
+        t0 = time.monotonic()
         self._tick_n += 1
-        if self._tick_n % 60 == 1:  # ~1s：z-order 强化 + 最小化自愈 + 锚点跟随
+        if self._tick_n % 30 == 1:  # ~1s：z-order 校验（错位才跨进程调）+ 锚点跟随
             self._seat_above_desktop()
             self._follow_anchor()
         c = self.canvas
-        target = self.spec.snapshot()
+        target, prev_t, t_prev, t_curr = self.spec.interp_snapshot()
         if self.spec.err:
             if self._status_shown != "err":
                 self._status_shown = "err"
@@ -243,15 +263,22 @@ class VisPanel:
         if self._status_shown:
             self._status_shown = ""
             c.itemconfig(self._status, text="")
-        # 攻/衰包络在 UI 层按帧率做：立即攻、指数衰（60fps 平滑，替代音频线程 23Hz 步进）
-        self._disp = np.maximum(target[:self.n_bands], self._disp * 0.90)
+        # 时间插值：音频回调 ~23.4Hz 与显示 30fps 不同步，帧间线性插值让运动连续
+        now = time.monotonic()
+        span = max(t_curr - t_prev, 1e-3)
+        alpha = max(0.0, min(1.0, (now - t_prev) / span))
+        smooth = prev_t[:self.n_bands] + (target[:self.n_bands] - prev_t[:self.n_bands]) * alpha
+        # 攻/衰包络在 UI 层按帧率做：立即攻、指数衰
+        self._disp = np.maximum(smooth, self._disp * BAR_FALL)
+        # 动态模糊：显示态向包络值缓动（时间域帧融合，零额外绘制成本）
+        self._shown = self._shown * BLUR_KEEP + self._disp * (1.0 - BLUR_KEEP)
         cy = self.H // 2
         ymax = (self.H // 2) - self.pad - int(2 * self.s)
         dot_h = max(1, int(self.s))
         geom = self._geom
         for i, (x, w) in enumerate(self._layout):
-            h = int(min(1.0, max(0.0, float(self._disp[i]))) * ymax)
-            self._peaks[i] = max(self._peaks[i] * 0.990 - 0.0012, h / max(1, ymax))
+            h = int(min(1.0, max(0.0, float(self._shown[i]))) * ymax)
+            self._peaks[i] = max(self._peaks[i] * PEAK_FALL - PEAK_DROP, h / max(1, ymax))
             pi = int(self._peaks[i] * ymax)  # 不做下限钳制：无声列完全隐藏
             if h >= 1:  # 中轴对称：向上向下各伸展 h
                 if geom[i, 0] <= 0:
@@ -279,4 +306,5 @@ class VisPanel:
                 geom[i, 1] = 0
                 c.itemconfig(self._items_pk[i][0], state="hidden")
                 c.itemconfig(self._items_pk[i][1], state="hidden")
-        self.win.after(16, self._frame)
+        # 自适应节奏：本帧耗时从间隔里扣除，避免 after 漂移累积
+        self.win.after(max(5, FRAME_MS - int((time.monotonic() - t0) * 1000)), self._frame)

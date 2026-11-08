@@ -10,6 +10,7 @@ Spectrum[channel][256] 就是原始 FFT bin（线性频率轴），显示层直�
 from __future__ import annotations
 
 import threading
+import time
 
 import numpy as np
 
@@ -32,10 +33,18 @@ class Spectrum(threading.Thread):
         self._bin_idx = None  # 每条显示条对应的 bin 区间边界，打开设备后计算
         self._sr = 48000
         self._channels = 2
+        self._prev_bars = np.zeros(self._n)  # 上一代目标（供 UI 时间插值）
+        self._t_prev = 0.0
+        self._t_curr = 0.0
 
     def snapshot(self) -> np.ndarray:
         with self._lock:
             return self._bars.copy()
+
+    def interp_snapshot(self) -> tuple[np.ndarray, np.ndarray, float, float]:
+        """返回 (当前目标, 上一目标, t_prev, t_curr)，供 UI 做时间线性插值。"""
+        with self._lock:
+            return self._bars.copy(), self._prev_bars.copy(), self._t_prev, self._t_curr
 
     def stop(self):
         self._stop.set()
@@ -62,7 +71,10 @@ class Spectrum(threading.Thread):
             db = 20 * np.log10(vals + 1e-10)
             norm = np.clip((db + 78) / 50.0, 0.0, 1.0)
             with self._lock:
+                self._prev_bars = self._bars
                 self._bars = norm  # 原始目标值；攻/衰包络由 UI 层按帧率做（平滑不跳变）
+                self._t_prev = self._t_curr if self._t_curr else time.monotonic() - 0.0428
+                self._t_curr = time.monotonic()
         except Exception:
             pass
         return (None, pyaudio.paContinue)
@@ -91,4 +103,5 @@ class Spectrum(threading.Thread):
         except Exception as e:
             self.err = str(e)
             with self._lock:
-                self._bars = np.full(self._n, -1.0)  # UI 显示失败提示
+                self._prev_bars = self._bars = np.full(self._n, -1.0)  # UI 显示失败提示
+                self._t_prev = self._t_curr = time.monotonic()

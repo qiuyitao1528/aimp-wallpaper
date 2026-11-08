@@ -6,7 +6,6 @@ import re
 import subprocess
 import sys
 import tkinter as tk
-import winreg
 from tkinter import colorchooser, ttk
 
 from . import config, desktop
@@ -66,33 +65,9 @@ def _luma(hex_color: str) -> int:
         return 0
 
 
-def _registry_fonts() -> list[tuple[str, str]]:
-    """注册表枚举已装字体（HKLM+HKCU 合并），返回 (友好名, 字体文件名) 列表。"""
-    out: dict[tuple[str, str], None] = {}
-    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
-        try:
-            key = winreg.OpenKey(hive, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts")
-        except OSError:
-            continue
-        with key:
-            i = 0
-            while True:
-                try:
-                    name, fname, _ = winreg.EnumValue(key, i)
-                except OSError:
-                    break
-                i += 1
-                fname = str(fname).strip()
-                if not fname.lower().endswith((".ttf", ".ttc", ".otf")):
-                    continue  # 位图字体等不支持
-                label = re.sub(r"\s*[（(](TrueType|OpenType)[^)）]*[)）]\s*$", "", str(name)).strip()
-                if label:
-                    out.setdefault((label, fname))
-    return sorted(out)
-
-
 def _available_fonts() -> list[tuple[str, str]]:
-    fonts = _registry_fonts()
+    from . import wallpaper
+    fonts = wallpaper.font_entries()
     if fonts:
         return fonts
     fonts_dir = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
