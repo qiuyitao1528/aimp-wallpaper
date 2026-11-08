@@ -58,6 +58,7 @@ DEFAULTS = {
     "vis_pos": None,
     "vis_hidden": False,
     "vis_locked": False,        # 锁定频谱面板：仅禁拖动，仍跟随锚点
+    "vis_fps": 30,              # 频谱刷新率（10~120）
     # 原壁纸（首次运行自动记录，restore 用）
     "original_wallpaper": None,
     "original_position": None,  # 原壁纸 fill 模式（DWPOS int）或 None

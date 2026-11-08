@@ -25,10 +25,10 @@ from .audio_spectrum import Spectrum
 
 _BAR = (255, 255, 255, 255)
 _PEAK = (255, 255, 255, 255)
-FRAME_MS = 33   # 30fps：频谱数据 ~47Hz，插值后 30fps 已平滑且 CPU/桌面合成减半
-BAR_FALL = 0.81     # 条衰减系数/帧
-PEAK_FALL = 0.99    # 峰值帽衰减系数/帧
-PEAK_DROP = 0.0024  # 峰值帽线性下坠/帧
+FRAME_MS_DEFAULT = 33   # 默认 30fps：频谱数据 ~47Hz，插值后已平滑
+BAR_FALL_SEC = 0.81 ** 30   # 条衰减/秒（等效 30fps 下的 0.81/帧）
+PEAK_MULT_SEC = 0.99 ** 30  # 峰值帽指数衰减/秒
+PEAK_DROP_SEC = 0.0024 * 30  # 峰值帽线性下坠/秒
 
 
 class VisPanel:
@@ -70,6 +70,7 @@ class VisPanel:
         self.n_bands = len(self._layout)
         self._peaks = np.zeros(self.n_bands)
         self._disp = np.zeros(self.n_bands)          # UI 层包络值
+        self.frame_ms = FRAME_MS_DEFAULT             # 由 vis_fps 设置驱动
         self._geom = np.zeros((self.n_bands, 2), dtype=int)  # 画布路径的 [h, p] 缓存
         self._canvas_items_ready = False
         self._drag = None
@@ -268,8 +269,18 @@ class VisPanel:
 
     def _frame(self):
         t0 = time.monotonic()
+        # 刷新率（vis_fps 设置，10~60）；衰减系数按秒归一，任意刷新率手感一致
+        fps = max(10, min(120, int(self.cfg.get("vis_fps", 30) or 30)))
+        self.frame_ms = int(round(1000 / fps))
+        frame_s = self.frame_ms / 1000.0
+        bar_fall = BAR_FALL_SEC ** frame_s
+        peak_fall = PEAK_MULT_SEC ** frame_s
+        peak_drop = PEAK_DROP_SEC * frame_s
         self._tick_n += 1
-        if self._tick_n % 30 == 1:  # ~1s：z-order 校验（错位才跨进程调）+ 锚点跟随
+        if now_maint := getattr(self, "_last_maint", None):
+            pass
+        if time.monotonic() - getattr(self, "_last_maint", t0 - 1.0) >= 1.0:
+            self._last_maint = t0  # ~1s：z-order 校验（错位才跨进程调）+ 锚点跟随
             self._seat_above_desktop()
             self._follow_anchor()
         target, prev_t, t_prev, t_curr = self.spec.interp_snapshot()
@@ -284,24 +295,24 @@ class VisPanel:
         span = max(t_curr - t_prev, 1e-3)
         alpha = max(0.0, min(1.0, (now - t_prev) / span))
         smooth = prev_t[:self.n_bands] + (target[:self.n_bands] - prev_t[:self.n_bands]) * alpha
-        self._disp = np.maximum(smooth, self._disp * BAR_FALL)
+        self._disp = np.maximum(smooth, self._disp * bar_fall)
 
         cy = self.H // 2
         ymax = (self.H // 2) - self.pad - int(2 * self.s)
         dot_h = max(1, int(self.s))
 
         if self._ulw:
-            if not self._render_ulw(cy, ymax, dot_h):
+            if not self._render_ulw(cy, ymax, dot_h, peak_fall, peak_drop):
                 self._ulw = False
                 applog.log("ULW 不可用，回退画布渲染")
                 desktop.set_colorkey_attr(self._hwnd)
                 self._geom[:] = 0
                 self._make_canvas_items()
         else:
-            self._render_canvas(cy, ymax, dot_h)
+            self._render_canvas(cy, ymax, dot_h, peak_fall, peak_drop)
 
         # 自适应节奏：本帧耗时从间隔里扣除，避免 after 漂移累积
-        self.win.after(max(5, FRAME_MS - int((time.monotonic() - t0) * 1000)), self._frame)
+        self.win.after(max(5, self.frame_ms - int((time.monotonic() - t0) * 1000)), self._frame)
 
     def _set_status(self, text: str | None):
         """状态文字（None=清除）。"""
@@ -311,7 +322,7 @@ class VisPanel:
         if self._canvas_items_ready:
             self.canvas.itemconfig(self._status, text=self._status_text)
 
-    def _render_ulw(self, cy: int, ymax: int, dot_h: int) -> bool:
+    def _render_ulw(self, cy: int, ymax: int, dot_h: int, peak_fall: float, peak_drop: float) -> bool:
         d = self._draw
         d.rectangle((0, 0, self.W, self.H), fill=(0, 0, 0, 0))
         if self._status_text:
@@ -319,7 +330,7 @@ class VisPanel:
                    fill=(150, 150, 150, 220), anchor="mm")
         for i, (x, w) in enumerate(self._layout):
             h = int(min(1.0, max(0.0, float(self._disp[i]))) * ymax)
-            self._peaks[i] = max(self._peaks[i] * PEAK_FALL - PEAK_DROP, h / max(1, ymax))
+            self._peaks[i] = max(self._peaks[i] * peak_fall - peak_drop, h / max(1, ymax))
             pi = int(self._peaks[i] * ymax)
             if h >= 1:  # 中轴对称：向上向下各伸展 h
                 d.rectangle((x, cy - h, x + w - 1, cy + h - 1), fill=_BAR)
@@ -329,13 +340,13 @@ class VisPanel:
         pos = self._screen_pos()
         return self.surface.update(self._img, pos=pos)
 
-    def _render_canvas(self, cy: int, ymax: int, dot_h: int):
+    def _render_canvas(self, cy: int, ymax: int, dot_h: int, peak_fall: float, peak_drop: float):
         self._make_canvas_items()
         c = self.canvas
         geom = self._geom
         for i, (x, w) in enumerate(self._layout):
             h = int(min(1.0, max(0.0, float(self._disp[i]))) * ymax)
-            self._peaks[i] = max(self._peaks[i] * PEAK_FALL - PEAK_DROP, h / max(1, ymax))
+            self._peaks[i] = max(self._peaks[i] * peak_fall - peak_drop, h / max(1, ymax))
             pi = int(self._peaks[i] * ymax)
             if h >= 1:
                 if geom[i, 0] <= 0:

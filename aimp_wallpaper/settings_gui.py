@@ -185,6 +185,13 @@ class SettingsWindow:
         self.title_color_var = color_row("歌名颜色", "title_color", "#FFFFFF")
         self.sub_color_var = color_row("副行颜色", "sub_color", "#FFFFFF")
 
+        ttk.Label(self.win, text="刷新率(FPS)").grid(row=row, column=0, sticky="w", **pad)
+        self.fps_var = tk.StringVar(value=str(int(cfg.get("vis_fps", 30) or 30)))
+        ttk.Combobox(self.win, textvariable=self.fps_var, width=8,
+                     values=["15", "20", "24", "30", "45", "60", "90", "120"]).grid(
+            row=row, column=1, sticky="w", **pad)
+        row += 1
+
         ttk.Button(self.win, text="保存", command=self._save).grid(row=row, column=0, columnspan=2, pady=8)
 
         self.status = ttk.Label(self.win, text="保存后壁纸立即重新渲染", foreground="#888888")
@@ -216,6 +223,10 @@ class SettingsWindow:
         self.cfg["sub_bold"] = self.sbold_var.get()
         self.cfg["title_color"] = self.title_color_var.get()
         self.cfg["sub_color"] = self.sub_color_var.get()
+        try:
+            self.cfg["vis_fps"] = max(10, min(120, int(self.fps_var.get())))
+        except ValueError:
+            pass  # 非法输入保留原值
         config.save(self.cfg)
         if set_autostart(self.autostart_var.get()) != self.autostart_var.get():
             self.status.config(text="自启动设置写入失败", foreground="#C0392B")
