@@ -9,6 +9,7 @@ import ctypes
 import os
 import sys
 import threading
+import time
 import tkinter as tk
 from ctypes import wintypes
 
@@ -42,15 +43,18 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
     last_cover = None
     last_meta = None
     last_cfg_mtime = None
+    render_failed = False
+    retry_at = 0.0
 
-    def render(cover, meta, why: str) -> bool:
+    def render(cover, meta, why: str, quiet: bool = False) -> bool:
         try:
             paths = wallpaper.render_and_apply(cover, meta, cfg, wallpaper.get_monitors())
             applog.log(f"[{why}] 已更新 {len(paths)} 屏 "
                        f"字体: {cfg.get('title_font_file') or '默认'}/{cfg.get('sub_font_file') or '默认'}")
             return True
         except Exception:
-            applog.log_exc(f"[{why}] 渲染失败:\n", *sys.exc_info())  # 失败不拖垮主程序
+            if not quiet:  # 重试期间的失败不重复刷屏
+                applog.log_exc(f"[{why}] 渲染失败:\n", *sys.exc_info())  # 失败不拖垮主程序
             return False
 
     while not stop.is_set():
@@ -87,9 +91,20 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
         if not snap["title"] and not snap["filename"]:
             continue  # 元数据还没就绪，等下一轮
         cover = ipc.wait_cover(gen, timeout=12.0)  # 覆盖 10s 封面重试窗口
+        # 上次渲染失败（如显示器睡眠中）：每 10s 静默重试，环境恢复后立即补渲染
+        if render_failed and last_cover is not None and time.monotonic() >= retry_at:
+            if render(last_cover, last_meta, "重试", quiet=True):
+                render_failed = False
+                applog.log("重试渲染成功，已恢复")
+            else:
+                retry_at = time.monotonic() + 10.0
         if render(cover, snap, "切歌"):
             last_gen = gen
             last_cover, last_meta = cover, {k: snap[k] for k in ("title", "artist", "album")}
+            render_failed = False
+        else:
+            render_failed = True
+            retry_at = time.monotonic() + 10.0
 
 
 def _acquire_single_instance_mutex() -> bool:
@@ -175,6 +190,11 @@ def main():
         else:
             p.hide()
 
+    def toggle_widget():
+        cfg["widget_hidden"] = not bool(cfg.get("widget_hidden"))
+        config.save(cfg)
+        applog.log(f"控件显隐切换: widget_hidden={cfg.get('widget_hidden')}")
+
     def restore_wp():
         def _do():
             import comtypes
@@ -210,7 +230,7 @@ def main():
 
     root.destroy = _quit_app  # 兜住小部件/面板右键的退出路径
     tray = Tray(root, on_settings=open_settings, on_toggle_vis=toggle_vis,
-                on_restore=restore_wp, on_quit=_quit_app)
+                on_toggle_widget=toggle_widget, on_restore=restore_wp, on_quit=_quit_app)
     atexit.register(lambda: tray.stop())  # 崩溃退出时兜底收托盘图标
     gc.freeze()  # 启动期对象移入永久代，进一步降低运行期 GC 成本
     applog.log("进入 mainloop")

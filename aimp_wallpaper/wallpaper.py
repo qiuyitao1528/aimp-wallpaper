@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import numpy as np
 import re
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
@@ -166,26 +167,80 @@ def _load_font(bold: bool, size: int, font_file: str | None = None) -> tuple[Ima
     return ImageFont.load_default(size), False
 
 
+def _cover_fit_full(im: Image.Image, w: int, h: int) -> Image.Image:
+    """等比放大铺满再居中裁剪（全分辨率 LANCZOS）。"""
+    im = im.convert("RGB")
+    scale = max(w / im.width, h / im.height)
+    im = im.resize((max(w, int(im.width * scale + 0.5)), max(h, int(im.height * scale + 0.5))), Image.LANCZOS)
+    x, y = (im.width - w) // 2, (im.height - h) // 2
+    return im.crop((x, y, x + w, y + h))
+
+
+def _placeholder_bg(w: int, h: int) -> Image.Image:
+    bg = Image.new("RGB", (w, h))
+    d = ImageDraw.Draw(bg)
+    top, bottom = (34, 40, 54), (16, 18, 26)
+    for y in range(h):
+        t = y / max(1, h - 1)
+        d.line([(0, y), (w, y)], fill=tuple(int(a + (b - a) * t) for a, b in zip(top, bottom)))
+    return bg
+
+
+def _dominant_color(cover: Image.Image) -> tuple[int, int, int]:
+    """封面平均主色（适度提饱和，偏暗时多提）。"""
+    small = np.asarray(cover.convert("RGB").resize((40, 40)), dtype=np.float64)
+    r, g, b = small[..., 0].mean(), small[..., 1].mean(), small[..., 2].mean()
+    mx = max(r, g, b)
+    boost = 1.25 if mx > 40 else 1.8
+    return (min(255, int(r * boost)), min(255, int(g * boost)), min(255, int(b * boost)))
+
+
+def _vignette(img: Image.Image, strength: int = 120) -> Image.Image:
+    """叠加上透下暗的黑色渐变（电影感）。"""
+    w, h = img.size
+    grad = Image.new("L", (1, h))
+    for y in range(h):
+        grad.putpixel((0, y), int(strength * (y / max(1, h - 1)) ** 1.2))
+    grad = grad.resize((w, h))
+    out = img.convert("RGBA")
+    black = Image.new("RGBA", (w, h), (0, 0, 0, 255))
+    black.putalpha(grad)
+    out.alpha_composite(black)
+    return out.convert("RGB")
+
+
 def _blur_bg(cover: Image.Image | None, w: int, h: int, cfg: dict) -> Image.Image:
-    if cover is not None:
-        # 全是模糊，双线性足够；直接在 1/3 尺寸上等比铺满裁剪+模糊再放大（~10x 提速，视觉无差）
-        sw, sh = max(2, w // 3), max(2, h // 3)
-        im = cover.convert("RGB")
-        scale = max(sw / im.width, sh / im.height)
-        im = im.resize((max(sw, int(im.width * scale + 0.5)), max(sh, int(im.height * scale + 0.5))), Image.BILINEAR)
-        x, y = (im.width - sw) // 2, (im.height - sh) // 2
-        bg = im.crop((x, y, x + sw, y + sh))
-        bg = bg.filter(ImageFilter.GaussianBlur(radius=max(4, cfg["blur_radius"]) / 3.0))
-        bg = bg.resize((w, h), Image.BILINEAR)
-        bg = ImageEnhance.Brightness(bg).enhance(cfg["darken"])
-        bg = ImageEnhance.Color(bg).enhance(0.9)
-    else:
+    """背景方案分发：blur=高斯模糊 / blur_vignette=模糊+暗角 / sharp=原图铺满 / gradient=主色渐变。"""
+    style = cfg.get("bg_style", "blur")
+    if cover is None:
+        return _placeholder_bg(w, h)
+    if style == "sharp":
+        bg = _cover_fit_full(cover, w, h)
+        return ImageEnhance.Brightness(bg).enhance(cfg["darken"])
+    if style == "gradient":
+        base = _dominant_color(cover)
+        k = float(cfg["darken"])
+        top = tuple(int(c * 0.30 * k / max(0.75, k)) for c in base)
+        bottom = tuple(min(255, int(c * 0.75 * max(0.75, k))) for c in base)
         bg = Image.new("RGB", (w, h))
         d = ImageDraw.Draw(bg)
-        top, bottom = (34, 40, 54), (16, 18, 26)
         for y in range(h):
             t = y / max(1, h - 1)
             d.line([(0, y), (w, y)], fill=tuple(int(a + (b - a) * t) for a, b in zip(top, bottom)))
+        return bg
+    # blur / blur_vignette：1/3 降采样 + 高斯（双线性足够，~10x 提速）
+    sw, sh = max(2, w // 3), max(2, h // 3)
+    im = cover.convert("RGB")
+    scale = max(sw / im.width, sh / im.height)
+    im = im.resize((max(sw, int(im.width * scale + 0.5)), max(sh, int(im.height * scale + 0.5))), Image.BILINEAR)
+    x, y = (im.width - sw) // 2, (im.height - sh) // 2
+    bg = im.crop((x, y, x + sw, y + sh))
+    bg = bg.filter(ImageFilter.GaussianBlur(radius=max(4, cfg["blur_radius"]) / 3.0))
+    bg = bg.resize((w, h), Image.BILINEAR)
+    bg = ImageEnhance.Brightness(bg).enhance(cfg["darken"])
+    bg = ImageEnhance.Color(bg).enhance(0.9)
+    if style == "blur_vignette":
+        bg = _vignette(bg, 120)
     return bg
 
 

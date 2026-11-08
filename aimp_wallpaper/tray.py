@@ -21,7 +21,7 @@ def _load_image():
 
 
 class Tray:
-    def __init__(self, root, on_settings, on_toggle_vis, on_restore, on_quit):
+    def __init__(self, root, on_settings, on_toggle_vis, on_toggle_widget, on_restore, on_quit):
         import pystray
 
         from . import applog
@@ -41,6 +41,7 @@ class Tray:
             pystray.Menu(
                 pystray.MenuItem("设置…", lambda: post("设置", on_settings), default=True),
                 pystray.MenuItem("显示 / 隐藏频谱面板", lambda: post("开关可视化", on_toggle_vis)),
+                pystray.MenuItem("显示 / 隐藏控件", lambda: post("开关控件", on_toggle_widget)),
                 pystray.MenuItem("恢复原壁纸", lambda: post("恢复原壁纸", on_restore)),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("退出", lambda: post("退出", on_quit)),

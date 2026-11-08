@@ -177,6 +177,32 @@ class OverlaySurface:
             pass
 
 
+# ---------- 桌面层覆盖窗口协同：Progman 压到所有覆盖窗口之下 ----------
+
+_overlays: list[int] = []
+NOMOVE_NOSIZE_NOACTIVATE = 0x2 | 0x1 | 0x10
+
+
+def register_overlay(hwnd) -> None:
+    """登记桌面层覆盖窗口（控件/频谱面板）。登记顺序不影响最终层叠。"""
+    h = int(hwnd)
+    if h not in _overlays:
+        _overlays.append(h)
+
+
+def seat_overlays() -> bool:
+    """把 Progman 插到所有已登记覆盖窗口之下；z-order 已正确时零写操作。"""
+    progman = user32.FindWindowW("Progman", None)
+    if not progman or not _overlays:
+        return False
+    if user32.GetWindow(progman, GW_HWNDPREV) == HWND_T(_overlays[0]):
+        return True
+    user32.SetWindowPos(progman, HWND_T(_overlays[0]), 0, 0, 0, 0, NOMOVE_NOSIZE_NOACTIVATE)
+    for h in _overlays[1:]:
+        user32.SetWindowPos(HWND_T(h), HWND_T(_overlays[0]), 0, 0, 0, 0, NOMOVE_NOSIZE_NOACTIVATE)
+    return True
+
+
 def find_desktop_parent() -> HWND_T | None:
     """返回应 SetParent 的目标：双 WorkerW 查找 → Progman 兜底。"""
     progman = user32.FindWindowW("Progman", None)
