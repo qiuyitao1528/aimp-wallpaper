@@ -121,6 +121,14 @@ def main():
     sys.excepthook = lambda t, v, tb: applog.log_exc("未捕获异常:\n", t, v, tb)
     import gc
     gc.set_threshold(50_000, 100, 100)  # 动画循环：降低 GC 频率防微卡顿
+    # 频谱动画时序：1ms 系统定时器分辨率 + 进程优先级提档，压 after 回调的调度迟到
+    try:
+        ctypes.windll.winmm.timeBeginPeriod(1)
+        atexit.register(lambda: ctypes.windll.winmm.timeEndPeriod(1))
+        ctypes.windll.kernel32.SetPriorityClass(
+            ctypes.windll.kernel32.GetCurrentProcess(), 0x00008000)  # ABOVE_NORMAL_PRIORITY_CLASS
+    except Exception:
+        pass
 
     _set_dpi_aware()
     ipc = AimpIPC()
