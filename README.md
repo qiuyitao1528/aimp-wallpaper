@@ -4,16 +4,15 @@
 
 ![screenshot](docs/screenshot.png)
 
-English TL;DR: A Windows desktop wallpaper that follows what AIMP is playing — album-art poster wallpaper (sharp 1:1 cover + blurred background + title/artist/album), plus a classic-style spectrum panel, desktop music widget and tray icon. Built with Python (PIL + Tk + WASAPI loopback), packaged with Inno Setup.
-
 ## 功能
 
-- **海报式动态壁纸**：随播放自动更新；封面原尺寸不放大、超屏才等比缩小；背景高斯模糊可调；多显示器逐屏渲染
-- **频谱面板**：AIMP 经典样式（白条 + 点状峰值帽），WASAPI 环回自算 FFT（4096 点、线性频率轴，与 AIMP 官方实现一致），60fps 渲染，可拖动/锁定/隐藏
-- **桌面音乐控件**：封面缩略图、播放/暂停/上下曲、进度条
+- **海报式动态壁纸**：随播放自动更新；封面原尺寸不放大、超屏才等比缩小；多显示器逐屏渲染
+- **频谱面板**：AIMP 经典样式（白条 + 点状峰值帽），WASAPI 环回自算 FFT（4096 点、线性频率轴，与 AIMP 官方实现一致），可拖动/锁定/隐藏
+- **桌面音乐控件**：封面缩略图、播放/暂停/上下曲、进度条拖动
 - **系统托盘**：设置、显示/隐藏频谱面板、恢复原壁纸、退出
-- **设置**：歌名/副行字号（像素）与字体**分开设置**（枚举系统全部字体）、三个纵向间距、文字阴影/加粗开关、频谱频率上限、开机自启、退出时恢复原壁纸（可关）
-- **其他**：配置热重载（保存立即生效）、单实例、首次运行自动记录原壁纸（`restore` 子命令或卸载时自动恢复）、运行日志（`%LOCALAPPDATA%\aimp-wallpaper\aimp-wallpaper.log`）
+- **丰富的壁纸排版设置**：歌名/副行字号与字体分开设置（枚举系统全部字体）、三个纵向间距、文字阴影/加粗开关、歌名/副行颜色自选、过长时换行或省略号截断（各自可选）
+- **渲染**：UpdateLayeredWindow 逐像素 alpha 原子呈现，无闪烁；刷新率 10~120fps 可调
+- **其他**：配置热重载（保存立即生效）、单实例、首次运行自动记录原壁纸（`restore` 子命令或卸载时自动恢复）、运行日志
 
 ## 安装
 
@@ -51,10 +50,10 @@ iscc installer.iss
 - **数据源**：AIMP 自带 Remote API（`AIMP2_RemoteInfo` 窗口消息 + 共享内存 + WM_COPYDATA 封面推送），零插件依赖。常量已按 AIMP v5.40.2727 实测校准（`scripts/probe_aimp.py`）
 - **封面**：`GET_ALBUMART(29)` → AIMP 回推 WM_COPYDATA（dwData=`0x41495043`，图片字节流）。切歌后 10s 重试窗口内重试（切歌瞬间 AIMP 可能还没解析好封面）
 - **元数据**：共享内存 2048 字节，`0x00`=字符串区偏移(0x58)、`0x28` 起依次 Album/Artist/Date/FileName/Genre/Title 字符长度，`0x58` 起紧凑 UTF-16
-- **频谱**：AIMP 官方可视化即线性频率轴直出 FFT bin（见 `apiVisuals.h`），本面板对齐该实现；采集走 WASAPI 环回（pyaudiowpatch），攻/衰包络在 UI 层按帧率做
+- **频谱**：AIMP 官方可视化即线性频率轴直出 FFT bin（见 `apiVisuals.h`），本面板对齐该实现；采集走 WASAPI 环回（pyaudiowpatch），帧间做时间线性插值
 - **渲染**：PIL 海报式渲染，PNG 输出；模糊背景 1/3 尺寸降采样加速；封面/背景按内容哈希缓存
+- **覆盖窗口**：Win11 26300 上 `SetParent` 进 Progman/WorkerW 的窗口不被 DWM 合成，改用**顶层窗口 + `UpdateLayeredWindow` 逐像素 alpha 原子呈现 + `SetWindowPos` 把 Progman 压到窗口下方**（Rainmeter/Lively 同思路）
 - **设壁纸**：comtypes 手写 `IDesktopWallpaper`（IID `B92B56A9-8B55-4E14-9A89-0199BBB6F93B`——网上常见 IID 有误），逐屏 SetWallpaper
-- **桌面层窗口**（Win11 26300 实测）：`SetParent` 到 Progman/WorkerW 的外来窗口不被 DWM 合成，改用**顶层窗口 + 色键分层（LWA_COLORKEY）+ `SetWindowPos` 把 Progman 压到窗口下方**实现桌面级 z-order
 
 ## 已知限制
 
