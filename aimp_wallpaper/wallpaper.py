@@ -241,6 +241,17 @@ def _rounded(im: Image.Image, radius: int) -> Image.Image:
     return im
 
 
+def _hex_rgb(value, default: tuple[int, int, int]) -> tuple[int, int, int]:
+    """'#RRGGBB' → (r,g,b)；非法回退 default。"""
+    try:
+        s = str(value).strip().lstrip("#")
+        if len(s) == 6:
+            return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+    except (ValueError, TypeError):
+        pass
+    return default
+
+
 def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: dict,
                   want_anchor: bool = False, bg: Image.Image | None = None):
     """渲染海报。want_anchor=True 时返回 (img, anchor)，anchor=(文字区左缘x, 专辑行底部y)。
@@ -321,13 +332,15 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
             th = title_font.size * len(lines) + line_gap * (len(lines) - 1)
             sh = sub_font.size * len(sub_lines) + sub_gap * (len(sub_lines) - 1)
             ty = cy + (ch - (th + block_gap + sh)) // 2
+            tr, tg, tb = _hex_rgb(cfg.get("title_color"), (255, 255, 255))
+            sr, sg, sb = _hex_rgb(cfg.get("sub_color"), (235, 238, 245))
             for ln in lines:
-                _draw_shadow_text(layer, (tx, ty), ln, title_font, stroke_width=title_stroke,
-                                  shadow=shadow)
+                _draw_shadow_text(layer, (tx, ty), ln, title_font, fill=(tr, tg, tb, 255),
+                                  stroke_width=title_stroke, shadow=shadow)
                 ty += title_font.size + line_gap
             ty += block_gap
             for s in sub_lines:
-                _draw_shadow_text(layer, (tx, ty), s, sub_font, fill=(235, 238, 245, 205),
+                _draw_shadow_text(layer, (tx, ty), s, sub_font, fill=(sr, sg, sb, 205),
                                   shadow=shadow, stroke_width=sub_stroke)
                 ty += sub_font.size + sub_gap
             anchor = (tx, ty - sub_gap)  # 专辑行文字底部

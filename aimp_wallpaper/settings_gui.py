@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tkinter as tk
 import winreg
-from tkinter import ttk
+from tkinter import colorchooser, ttk
 
 from . import config, desktop
 
@@ -54,6 +54,16 @@ def set_autostart(enabled: bool) -> bool:
         return True
     except Exception:
         return False
+
+
+def _luma(hex_color: str) -> int:
+    """'#RRGGBB' 亮度（0~255），用于色块按钮上黑/白字的选择。"""
+    try:
+        s = hex_color.lstrip("#")
+        r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+        return (r * 299 + g * 587 + b * 114) // 1000
+    except (ValueError, IndexError):
+        return 0
 
 
 def _registry_fonts() -> list[tuple[str, str]]:
@@ -179,6 +189,27 @@ class SettingsWindow:
             row=row, column=0, columnspan=2, sticky="w", **pad)
         row += 1
 
+        def color_row(label_text, key, default):
+            nonlocal row
+            ttk.Label(self.win, text=label_text).grid(row=row, column=0, sticky="w", **pad)
+            var = tk.StringVar(value=str(cfg.get(key, default) or default).upper())
+
+            def pick():
+                rgb, hexv = colorchooser.askcolor(color=var.get(), parent=self.win, title=label_text)
+                if hexv:  # 取消则不改动
+                    var.set(str(hexv).upper())
+                    btn.configure(bg=var.get(),
+                                  fg="#000000" if _luma(var.get()) > 140 else "#FFFFFF")
+
+            btn = tk.Button(self.win, textvariable=var, bg=var.get(), relief="groove",
+                            width=10, command=pick)
+            btn.grid(row=row, column=1, sticky="w", **pad)
+            row += 1
+            return var
+
+        self.title_color_var = color_row("歌名颜色", "title_color", "#FFFFFF")
+        self.sub_color_var = color_row("副行颜色", "sub_color", "#EDEEF5")
+
         ttk.Button(self.win, text="保存", command=self._save).grid(row=row, column=0, columnspan=2, pady=8)
 
         self.status = ttk.Label(self.win, text="保存后壁纸立即重新渲染", foreground="#888888")
@@ -208,6 +239,8 @@ class SettingsWindow:
         self.cfg["text_shadow"] = self.shadow_var.get()
         self.cfg["title_bold"] = self.tbold_var.get()
         self.cfg["sub_bold"] = self.sbold_var.get()
+        self.cfg["title_color"] = self.title_color_var.get()
+        self.cfg["sub_color"] = self.sub_color_var.get()
         config.save(self.cfg)
         if set_autostart(self.autostart_var.get()) != self.autostart_var.get():
             self.status.config(text="自启动设置写入失败", foreground="#C0392B")

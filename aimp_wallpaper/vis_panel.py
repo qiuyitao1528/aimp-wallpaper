@@ -244,14 +244,14 @@ class VisPanel:
             self._status_shown = ""
             c.itemconfig(self._status, text="")
         # 攻/衰包络在 UI 层按帧率做：立即攻、指数衰（60fps 平滑，替代音频线程 23Hz 步进）
-        self._disp = np.maximum(target[:self.n_bands], self._disp * 0.93)
+        self._disp = np.maximum(target[:self.n_bands], self._disp * 0.90)
         cy = self.H // 2
         ymax = (self.H // 2) - self.pad - int(2 * self.s)
         dot_h = max(1, int(self.s))
         geom = self._geom
         for i, (x, w) in enumerate(self._layout):
             h = int(min(1.0, max(0.0, float(self._disp[i]))) * ymax)
-            self._peaks[i] = max(self._peaks[i] * 0.994 - 0.0006, h / max(1, ymax))
+            self._peaks[i] = max(self._peaks[i] * 0.990 - 0.0012, h / max(1, ymax))
             pi = int(self._peaks[i] * ymax)  # 不做下限钳制：无声列完全隐藏
             if h >= 1:  # 中轴对称：向上向下各伸展 h
                 if geom[i, 0] <= 0:

@@ -42,6 +42,8 @@ DEFAULTS = {
     "text_shadow": True,            # 文字阴影（歌名+副行）
     "title_bold": True,             # 歌名加粗
     "sub_bold": False,              # 副行加粗
+    "title_color": "#FFFFFF",       # 歌名颜色
+    "sub_color": "#EDEEF5",         # 副行颜色
     "show_text": True,
     "restore_on_quit": True,    # 退出时恢复原壁纸（设置里可关）
     # 渲染产物目录（%LOCALAPPDATA%）
