@@ -189,8 +189,19 @@ def _blur_bg(cover: Image.Image | None, w: int, h: int, cfg: dict) -> Image.Imag
     return bg
 
 
-def _wrap_title(draw, text, font, max_w):
-    """按像素宽度折行，最多 2 行，超出加省略号。"""
+def _ellipsis(draw, text, font, max_w):
+    """单行省略号截断。"""
+    if draw.textlength(text, font=font) <= max_w:
+        return text
+    while text and draw.textlength(text + "…", font=font) > max_w:
+        text = text[:-1]
+    return (text + "…") if text else "…"
+
+
+def _wrap_title(draw, text, font, max_w, max_lines=2):
+    """超宽处理：max_lines>1 按像素宽度折行（末行放不下收省略号）；==1 直接省略号截断。"""
+    if max_lines <= 1:
+        return [_ellipsis(draw, text, font, max_w)]
     if draw.textlength(text, font=font) <= max_w:
         return [text]
     lines, cur = [], ""
@@ -200,14 +211,11 @@ def _wrap_title(draw, text, font, max_w):
             cur = ch
         else:
             cur += ch
-        if len(lines) == 2:
+        if len(lines) == max_lines:
             break
-    if len(lines) == 2:  # 装不下：第二行收省略号
+    if len(lines) == max_lines:  # 装不下：末行收省略号
         rest = cur + text[text.index(cur) + len(cur):] if cur and text.find(cur) >= 0 else cur
-        last = rest.rstrip()
-        while last and draw.textlength(last + "…", font=font) > max_w:
-            last = last[:-1]
-        lines[1] = (last + "…") if last else "…"
+        lines[-1] = _ellipsis(draw, rest.rstrip(), font, max_w)
     elif cur:
         lines.append(cur)
     return lines
@@ -307,16 +315,19 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
             title_stroke = 1 if (title_bold and not title_real) else 0
             sub_stroke = 1 if (sub_bold and not sub_real) else 0
             title = meta.get("title") or "未知曲目"
-            lines = _wrap_title(ImageDraw.Draw(layer), title, title_font, tw_max)
+            lines = _wrap_title(ImageDraw.Draw(layer), title, title_font, tw_max,
+                                1 if cfg.get("title_overflow", "wrap") == "ellipsis" else 2)
             artist = meta.get("artist") or "未知艺术家"
             album = meta.get("album") or ""
-            sub_lines = [artist] + ([album] if album and album != artist else [])
-            # 副行超宽截断
+            sub_entries = [artist] + ([album] if album and album != artist else [])
             sub_draw = ImageDraw.Draw(layer)
-            for i, s in enumerate(sub_lines):
-                while sub_draw.textlength(s, font=sub_font) > tw_max and len(s) > 4:
-                    s = s[:-2].rstrip() + "…"
-                sub_lines[i] = s
+            sub_wrap = cfg.get("sub_overflow", "ellipsis") == "wrap"
+            sub_lines = []
+            for s in sub_entries:
+                if sub_wrap:  # 折行（每条最多 2 行，末行省略号）
+                    sub_lines.extend(_wrap_title(sub_draw, s, sub_font, tw_max, 2))
+                else:         # 省略号截断
+                    sub_lines.append(_ellipsis(sub_draw, s, sub_font, tw_max))
             line_gap = int(h * cfg.get("title_line_gap_ratio", 0.012))
             sub_gap = int(h * cfg.get("sub_line_gap_ratio", 0.014))
             block_gap = int(h * cfg.get("title_sub_gap_ratio", 0.02))

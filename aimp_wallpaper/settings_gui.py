@@ -182,6 +182,18 @@ class SettingsWindow:
             row += 1
             return var
 
+        def overflow_row(label_text, key, default):
+            nonlocal row
+            ttk.Label(self.win, text=label_text).grid(row=row, column=0, sticky="w", **pad)
+            cur = cfg.get(key, default)
+            var = tk.StringVar(value="换行" if cur == "wrap" else "省略号")
+            ttk.Combobox(self.win, textvariable=var, values=["换行", "省略号"],
+                         state="readonly", width=8).grid(row=row, column=1, sticky="w", **pad)
+            row += 1
+            return var
+
+        self.title_of_var = overflow_row("歌名过长", "title_overflow", "wrap")
+        self.sub_of_var = overflow_row("副行过长", "sub_overflow", "ellipsis")
         self.title_color_var = color_row("歌名颜色", "title_color", "#FFFFFF")
         self.sub_color_var = color_row("副行颜色", "sub_color", "#FFFFFF")
 
@@ -221,6 +233,8 @@ class SettingsWindow:
         self.cfg["text_shadow"] = self.shadow_var.get()
         self.cfg["title_bold"] = self.tbold_var.get()
         self.cfg["sub_bold"] = self.sbold_var.get()
+        self.cfg["title_overflow"] = "wrap" if self.title_of_var.get() == "换行" else "ellipsis"
+        self.cfg["sub_overflow"] = "wrap" if self.sub_of_var.get() == "换行" else "ellipsis"
         self.cfg["title_color"] = self.title_color_var.get()
         self.cfg["sub_color"] = self.sub_color_var.get()
         try:
