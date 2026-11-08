@@ -1,34 +1,34 @@
-"""可视化面板：桌面右下角实时频谱，100% 复原 AIMP 经典样式——
+"""可视化面板：桌面右下角实时频谱，AIMP 经典样式——
 
-- 背景完全透明（色键分层，壁纸直接透出）
-- 条形以水平中轴上下对称
-- 条宽从左（低频）到右（高频）由粗变细
-- 白色细条 + 点状峰值帽
+- 渲染走 UpdateLayeredWindow 逐像素 alpha（微软推荐动画路线）：PIL 画帧 →
+  预乘 BGRA → 原子呈现，绕开 GUI 工具包重绘路径，无闪烁、无色键锯齿
+- 条形以水平中轴上下对称；白色细条 + 点状峰值帽；无声列完全隐藏
+- 数据 47Hz（WASAPI 环回 FFT）与显示 30fps 之间做时间线性插值，运动连续
 
-渲染路线（Win11 26300 实测可行）：保持顶层窗口不 SetParent，色键分层
-（矩阵实验 m4 验证可绘制），SetWindowPos 把 Progman 压到本窗口下方得到
-桌面级 z-order，最小化自愈。
+窗口定位沿用实测路线：顶层窗口 + SetWindowPos 把 Progman 压到窗口下方。
+UpdateLayeredWindow 不可用时自动回退到画布 + 色键的旧路径。
 """
 from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import tkinter as tk
 from ctypes import byref
 
 import numpy as np
+from PIL import Image, ImageDraw
 
-from . import config, desktop
+from . import applog, config, desktop, wallpaper
 from .audio_spectrum import Spectrum
 
-FRAME_MS = 33   # 30fps：频谱数据本身 ~23Hz，30fps 已平滑且 CPU/桌面合成减半
-BAR_FALL = 0.81     # 条衰减系数/帧（30fps，等效旧 60fps 的 0.90）
+_BAR = (255, 255, 255, 255)
+_PEAK = (255, 255, 255, 255)
+FRAME_MS = 33   # 30fps：频谱数据 ~47Hz，插值后 30fps 已平滑且 CPU/桌面合成减半
+BAR_FALL = 0.81     # 条衰减系数/帧
 PEAK_FALL = 0.99    # 峰值帽衰减系数/帧
 PEAK_DROP = 0.0024  # 峰值帽线性下坠/帧
-
-_BAR = "#FFFFFF"
-_PEAK = "#FFFFFF"
 
 
 class VisPanel:
@@ -44,13 +44,14 @@ class VisPanel:
         self.win.overrideredirect(True)
         self.win.resizable(False, False)
         self.win.configure(bg=desktop.KEY_HEX)
+        # 画布仅作 ULW 不可用时的回退渲染面（ULW 模式下其内容不参与显示）
         self.canvas = tk.Canvas(self.win, width=self.W, height=self.H,
                                 bg=desktop.KEY_HEX, highlightthickness=0, bd=0)
         self.canvas.pack(fill="both", expand=True)
-        self.canvas.bind("<Button-1>", self._drag_start)
-        self.canvas.bind("<B1-Motion>", self._drag_move)
-        self.canvas.bind("<ButtonRelease-1>", self._drag_end)
-        self.canvas.bind("<Button-3>", self._popup)
+        self.win.bind("<Button-1>", self._drag_start)
+        self.win.bind("<B1-Motion>", self._drag_move)
+        self.win.bind("<ButtonRelease-1>", self._drag_end)
+        self.win.bind("<Button-3>", self._popup)
 
         self.menu = tk.Menu(self.win, tearoff=0)
         self.menu.add_command(label="设置…", command=self._open_settings)
@@ -62,30 +63,19 @@ class VisPanel:
         self.menu.add_command(label="隐藏面板", command=self.hide)
         self.menu.add_command(label="退出", command=self._quit)
 
+        self._status_font = wallpaper._load_font(False, int(10 * self.s), "segoeui.ttf")[0]
+        self._status_text = "正在接入系统声音…"
+
         self._layout = self._compute_layout()  # [(x, w), ...]
         self.n_bands = len(self._layout)
-        self._status = self.canvas.create_text(self.W / 2, self.H / 2, text="正在接入系统声音…",
-                                               font=("Segoe UI", -int(10 * self.s)), fill="#888888")
-        self._status_shown = "boot"
-        # 预建画布元素，每帧只改 coords（Tk 建元素开销大，delete+重建是卡顿主因）
-        cy0 = self.H // 2
-        self._items_bar, self._items_pk = [], []
-        for x, w in self._layout:
-            self._items_bar.append(self.canvas.create_rectangle(x, cy0, x + w, cy0,
-                                                                fill=_BAR, outline="", width=0,
-                                                                state="hidden"))
-            self._items_pk.append((
-                self.canvas.create_rectangle(x, cy0, x + w, cy0, fill=_PEAK, outline="", width=0,
-                                             state="hidden"),
-                self.canvas.create_rectangle(x, cy0, x + w, cy0, fill=_PEAK, outline="", width=0,
-                                             state="hidden")))
-        self._disp = np.zeros(self.n_bands)          # UI 层包络值
         self._peaks = np.zeros(self.n_bands)
-        self._geom = np.zeros((self.n_bands, 2), dtype=int)  # [h, p] 整数缓存，未变不重绘
-        self._anchor_cache = None
-        self._anchor_cache_mtime = None
+        self._disp = np.zeros(self.n_bands)          # UI 层包络值
+        self._geom = np.zeros((self.n_bands, 2), dtype=int)  # 画布路径的 [h, p] 缓存
+        self._canvas_items_ready = False
         self._drag = None
         self._tick_n = 0
+        self._anchor_cache = None
+        self._anchor_cache_mtime = None
 
         self.spec = Spectrum(n_bands=self.n_bands, f_max=cfg.get("vis_fmax", 16000))
         self.spec.start()
@@ -94,8 +84,24 @@ class VisPanel:
         self.win.update_idletasks()
         hwnd = desktop.user32.GetAncestor(desktop.HWND_T(self.win.winfo_id()), desktop.GA_ROOT)
         self._hwnd = hwnd or desktop.HWND_T(self.win.winfo_id())
-        # 色键分层：KEY 色像素全透明（壁纸透出），其余不透明；矩阵实验 m4 验证可绘制
-        desktop.style_desktop_widget(self._hwnd, 255)
+        self._ulw = True
+        self.surface = None
+        self._img = self._draw = None
+        try:
+            self.surface = desktop.OverlaySurface(self._hwnd, self.W, self.H)
+            self._img = Image.new("RGBA", (self.W, self.H), (0, 0, 0, 0))
+            self._draw = ImageDraw.Draw(self._img)
+            if not self.surface.ok:
+                self._ulw = False
+        except Exception:
+            applog.log_exc("OverlaySurface 创建失败:\n", *sys.exc_info())
+            self._ulw = False
+        if self._ulw:
+            desktop.style_overlay_window(self._hwnd)
+        else:
+            desktop.style_desktop_widget(self._hwnd, 255)
+            self._make_canvas_items()
+        applog.log(f"可视化渲染路径: {'ULW' if self._ulw else '画布'}")
         self._seat_above_desktop()
         self.win.after(200, self._frame)
 
@@ -111,11 +117,30 @@ class VisPanel:
             x += w + gap
         return xs or [(self.pad, w)]
 
+    def _make_canvas_items(self):
+        """画布回退路径的预建图元（hidden 态，零尺寸矩形会画成 1px 线）。"""
+        if self._canvas_items_ready:
+            return
+        cy0 = self.H // 2
+        self._items_bar, self._items_pk = [], []
+        for x, w in self._layout:
+            self._items_bar.append(self.canvas.create_rectangle(x, cy0, x + w, cy0,
+                                                                fill="#FFFFFF", outline="", width=0,
+                                                                state="hidden"))
+            self._items_pk.append((
+                self.canvas.create_rectangle(x, cy0, x + w, cy0, fill="#FFFFFF", outline="", width=0,
+                                             state="hidden"),
+                self.canvas.create_rectangle(x, cy0, x + w, cy0, fill="#FFFFFF", outline="", width=0,
+                                             state="hidden")))
+        self._status = self.canvas.create_text(
+            self.W / 2, self.H / 2, text=self._status_text,
+            font=("Segoe UI", -int(10 * self.s)), fill="#888888")
+        self._canvas_items_ready = True
+
     # ---------- 桌面级 z-order ----------
 
     def _seat_above_desktop(self):
-        """把 Progman 压到本窗口下方（壁纸之上、普通窗口之下）；顺带处理被最小化。
-        z-order 已正确时零跨进程写操作（GetWindow 是无阻塞查询），explorer 忙也不会卡 UI。"""
+        """把 Progman 压到本窗口下方；z-order 已正确时零跨进程写操作。"""
         if desktop.user32.IsIconic(self._hwnd):
             desktop.user32.ShowWindow(self._hwnd, 4)  # SW_SHOWNOACTIVATE
         progman = desktop.user32.FindWindowW("Progman", None)
@@ -235,14 +260,11 @@ class VisPanel:
         SettingsWindow(self.win.master, self.cfg)
 
     def _quit(self):
-        try:
-            self.cfg["vis_pos"] = self._screen_pos()
-            config.save(self.cfg)
-        except Exception:
-            pass  # 存位置失败绝不拦退出
+        self.cfg["vis_pos"] = self._screen_pos()
+        config.save(self.cfg)
         self.win.master.destroy()
 
-    # ---------- 绘制循环：均匀条 + 中轴对称 + 点状峰值 ----------
+    # ---------- 帧循环：插值 + 包络 + 双渲染路径 ----------
 
     def _frame(self):
         t0 = time.monotonic()
@@ -250,33 +272,72 @@ class VisPanel:
         if self._tick_n % 30 == 1:  # ~1s：z-order 校验（错位才跨进程调）+ 锚点跟随
             self._seat_above_desktop()
             self._follow_anchor()
-        c = self.canvas
         target, prev_t, t_prev, t_curr = self.spec.interp_snapshot()
         if self.spec.err:
-            if self._status_shown != "err":
-                self._status_shown = "err"
-                c.itemconfig(self._status, text=f"音频采集失败：{self.spec.err[:48]}")
-            c.after(1000, self._frame)
+            self._set_status(f"音频采集失败：{self.spec.err[:48]}")
+            self.win.after(1000, self._frame)
             return
-        if self._status_shown:
-            self._status_shown = ""
-            c.itemconfig(self._status, text="")
-        # 时间插值：音频回调 ~23.4Hz 与显示 30fps 不同步，帧间线性插值让运动连续
+        self._set_status(None)
+
+        # 时间插值：数据 ~47Hz 与显示 30fps 节拍不同，帧间线性插值让运动连续
         now = time.monotonic()
         span = max(t_curr - t_prev, 1e-3)
         alpha = max(0.0, min(1.0, (now - t_prev) / span))
         smooth = prev_t[:self.n_bands] + (target[:self.n_bands] - prev_t[:self.n_bands]) * alpha
-        # 攻/衰包络在 UI 层按帧率做：立即攻、指数衰
         self._disp = np.maximum(smooth, self._disp * BAR_FALL)
+
         cy = self.H // 2
         ymax = (self.H // 2) - self.pad - int(2 * self.s)
         dot_h = max(1, int(self.s))
+
+        if self._ulw:
+            if not self._render_ulw(cy, ymax, dot_h):
+                self._ulw = False
+                applog.log("ULW 不可用，回退画布渲染")
+                desktop.set_colorkey_attr(self._hwnd)
+                self._geom[:] = 0
+                self._make_canvas_items()
+        else:
+            self._render_canvas(cy, ymax, dot_h)
+
+        # 自适应节奏：本帧耗时从间隔里扣除，避免 after 漂移累积
+        self.win.after(max(5, FRAME_MS - int((time.monotonic() - t0) * 1000)), self._frame)
+
+    def _set_status(self, text: str | None):
+        """状态文字（None=清除）。"""
+        if self._status_text == text:
+            return
+        self._status_text = text or ""
+        if self._canvas_items_ready:
+            self.canvas.itemconfig(self._status, text=self._status_text)
+
+    def _render_ulw(self, cy: int, ymax: int, dot_h: int) -> bool:
+        d = self._draw
+        d.rectangle((0, 0, self.W, self.H), fill=(0, 0, 0, 0))
+        if self._status_text:
+            d.text((self.W / 2, self.H / 2), self._status_text, font=self._status_font,
+                   fill=(150, 150, 150, 220), anchor="mm")
+        for i, (x, w) in enumerate(self._layout):
+            h = int(min(1.0, max(0.0, float(self._disp[i]))) * ymax)
+            self._peaks[i] = max(self._peaks[i] * PEAK_FALL - PEAK_DROP, h / max(1, ymax))
+            pi = int(self._peaks[i] * ymax)
+            if h >= 1:  # 中轴对称：向上向下各伸展 h
+                d.rectangle((x, cy - h, x + w - 1, cy + h - 1), fill=_BAR)
+            if pi >= 1:  # 点状峰值帽；无声列不画（整列透明=不可见+可穿透）
+                d.rectangle((x, cy - pi - dot_h, x + w - 1, cy - pi), fill=_PEAK)
+                d.rectangle((x, cy + pi, x + w - 1, cy + pi + dot_h), fill=_PEAK)
+        pos = self._screen_pos()
+        return self.surface.update(self._img, pos=pos)
+
+    def _render_canvas(self, cy: int, ymax: int, dot_h: int):
+        self._make_canvas_items()
+        c = self.canvas
         geom = self._geom
         for i, (x, w) in enumerate(self._layout):
             h = int(min(1.0, max(0.0, float(self._disp[i]))) * ymax)
             self._peaks[i] = max(self._peaks[i] * PEAK_FALL - PEAK_DROP, h / max(1, ymax))
-            pi = int(self._peaks[i] * ymax)  # 不做下限钳制：无声列完全隐藏
-            if h >= 1:  # 中轴对称：向上向下各伸展 h
+            pi = int(self._peaks[i] * ymax)
+            if h >= 1:
                 if geom[i, 0] <= 0:
                     c.itemconfig(self._items_bar[i], state="normal")
                     geom[i, 0] = h
@@ -286,8 +347,8 @@ class VisPanel:
                     c.coords(self._items_bar[i], x, cy - h, x + w, cy + h)
             elif geom[i, 0] > 0:
                 geom[i, 0] = 0
-                c.itemconfig(self._items_bar[i], state="hidden")  # 零尺寸矩形会画成 1px 线，必须隐藏
-            if pi >= 1:  # 点状峰值帽
+                c.itemconfig(self._items_bar[i], state="hidden")
+            if pi >= 1:
                 if geom[i, 1] <= 0:
                     c.itemconfig(self._items_pk[i][0], state="normal")
                     c.itemconfig(self._items_pk[i][1], state="normal")
@@ -302,5 +363,3 @@ class VisPanel:
                 geom[i, 1] = 0
                 c.itemconfig(self._items_pk[i][0], state="hidden")
                 c.itemconfig(self._items_pk[i][1], state="hidden")
-        # 自适应节奏：本帧耗时从间隔里扣除，避免 after 漂移累积
-        self.win.after(max(5, FRAME_MS - int((time.monotonic() - t0) * 1000)), self._frame)

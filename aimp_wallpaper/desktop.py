@@ -9,6 +9,8 @@ import ctypes
 from ctypes import POINTER, byref, c_int, c_size_t, c_ssize_t, c_void_p
 from ctypes import wintypes
 
+import numpy as np
+
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 
 HWND_T = c_void_p
@@ -43,6 +45,52 @@ user32.EnumWindows.argtypes = [ENUMPROC, LPARAM_T]
 user32.SystemParametersInfoW.restype = wintypes.BOOL
 user32.SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT, c_void_p, wintypes.UINT]
 
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG),
+                ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD),
+                ("biCompression", wintypes.DWORD), ("biSizeImage", wintypes.DWORD),
+                ("biXPelsPerMeter", wintypes.LONG), ("biYPelsPerMeter", wintypes.LONG),
+                ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+
+
+class BITMAPINFO(ctypes.Structure):
+    _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", wintypes.DWORD * 1)]
+
+
+class BLENDFUNCTION(ctypes.Structure):
+    _fields_ = [("BlendOp", wintypes.BYTE), ("BlendFlags", wintypes.BYTE),
+                ("SourceConstantAlpha", wintypes.BYTE), ("AlphaFormat", wintypes.BYTE)]
+
+
+class SIZE(ctypes.Structure):
+    _fields_ = [("cx", wintypes.LONG), ("cy", wintypes.LONG)]
+
+
+gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+gdi32.CreateCompatibleDC.restype = wintypes.HDC
+gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+gdi32.CreateDIBSection.restype = wintypes.HBITMAP
+gdi32.CreateDIBSection.argtypes = [wintypes.HDC, POINTER(BITMAPINFO), wintypes.UINT,
+                                   POINTER(c_void_p), wintypes.HANDLE, wintypes.DWORD]
+gdi32.SelectObject.restype = wintypes.HGDIOBJ
+gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+gdi32.DeleteDC.argtypes = [wintypes.HDC]
+user32.GetDC.restype = wintypes.HDC
+user32.GetDC.argtypes = [wintypes.HWND]
+user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+user32.UpdateLayeredWindow.restype = wintypes.BOOL
+user32.UpdateLayeredWindow.argtypes = [wintypes.HWND, wintypes.HDC,
+                                       POINTER(wintypes.POINT), POINTER(SIZE),
+                                       wintypes.HDC, POINTER(wintypes.POINT),
+                                       wintypes.COLORREF, POINTER(BLENDFUNCTION),
+                                       wintypes.DWORD]
+
+ULW_ALPHA = 0x02
+AC_SRC_OVER = 0x00
+AC_SRC_ALPHA = 0x01
+
+
 GA_ROOT = 2
 GW_HWNDPREV = 3
 GWL_EXSTYLE = -20
@@ -57,6 +105,76 @@ MSG_052C = 0x052C
 # 颜色键：卡片外角用此颜色的像素在分层窗口中变透明+可穿透
 KEY = (1, 2, 3)
 KEY_HEX = "#010203"
+
+
+def style_overlay_window(hwnd) -> None:
+    """TOOLWINDOW + NOACTIVATE + LAYERED（配合 UpdateLayeredWindow 逐像素 alpha）。
+    注意：不要再对该窗口调 SetLayeredWindowAttributes，二者互斥（后调者生效）。"""
+    ex = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+    ex |= WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+    user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex)
+
+
+def set_colorkey_attr(hwnd) -> None:
+    """切回色键分层模式（ULW 回退画布渲染时用）。"""
+    user32.SetLayeredWindowAttributes(hwnd, (KEY[0] | KEY[1] << 8 | KEY[2] << 16), 255,
+                                      LWA_COLORKEY | LWA_ALPHA)
+
+
+class OverlaySurface:
+    """UpdateLayeredWindow 表面：32bpp BGRA DIB（numpy 直写）+ 一帧一次原子呈现。
+    update() 接收 PIL RGBA 图（straight alpha），内部预乘后上屏。"""
+
+    def __init__(self, hwnd: int, w: int, h: int):
+        self.hwnd, self.w, self.h = hwnd, int(w), int(h)
+        self.hdc_screen = user32.GetDC(None)
+        self.hdc = gdi32.CreateCompatibleDC(self.hdc_screen)
+        bmi = BITMAPINFO()
+        bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmi.bmiHeader.biWidth = self.w
+        bmi.bmiHeader.biHeight = -self.h  # top-down
+        bmi.bmiHeader.biPlanes = 1
+        bmi.bmiHeader.biBitCount = 32
+        self.bits = c_void_p()
+        self.hbm = gdi32.CreateDIBSection(self.hdc, byref(bmi), 0, byref(self.bits), None, 0)
+        gdi32.SelectObject(self.hdc, self.hbm)
+        n = self.w * self.h * 4
+        self._buf = (ctypes.c_ubyte * n).from_address(self.bits.value or 0)
+        self.arr = np.ctypeslib.as_array(self._buf).reshape(self.h, self.w, 4)
+        self.blend = BLENDFUNCTION(AC_SRC_OVER, 0, 255, AC_SRC_ALPHA)
+        self.ok = bool(self.hbm) and bool(self.bits.value)
+
+    def update(self, img, pos: tuple[int, int] | None = None) -> bool:
+        """PIL RGBA（straight alpha）→ 预乘 BGRA → ULW 原子呈现。返回是否成功。
+        pos=(x, y) 时显式指定屏幕位置（推荐：规避 Tk 窗口实际尺寸与表面不一致的坑）。"""
+        if not self.ok:
+            return False
+        a = np.asarray(img)
+        alpha = a[..., 3:4].astype(np.uint16)
+        self.arr[..., 0] = a[..., 2] * alpha[..., 0] // 255  # B
+        self.arr[..., 1] = a[..., 1] * alpha[..., 0] // 255  # G
+        self.arr[..., 2] = a[..., 0] * alpha[..., 0] // 255  # R
+        self.arr[..., 3] = a[..., 3]
+        if pos:
+            pt_dst = wintypes.POINT(*pos)
+            size = SIZE(self.w, self.h)
+            return bool(user32.UpdateLayeredWindow(
+                HWND_T(self.hwnd), None, byref(pt_dst), byref(size), self.hdc,
+                byref(wintypes.POINT(0, 0)), 0, byref(self.blend), ULW_ALPHA))
+        return bool(user32.UpdateLayeredWindow(
+            HWND_T(self.hwnd), None, None, None, self.hdc,
+            byref(wintypes.POINT(0, 0)), 0, byref(self.blend), ULW_ALPHA))
+
+    def close(self) -> None:
+        try:
+            if self.hbm:
+                gdi32.DeleteObject(self.hbm)
+            if self.hdc:
+                gdi32.DeleteDC(self.hdc)
+            if self.hdc_screen:
+                user32.ReleaseDC(None, self.hdc_screen)
+        except Exception:
+            pass
 
 
 def find_desktop_parent() -> HWND_T | None:
