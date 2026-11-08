@@ -249,15 +249,19 @@ class VisPanel:
         for i, (x, w) in enumerate(self._layout):
             h = int(min(1.0, max(0.0, float(self._disp[i]))) * ymax)
             self._peaks[i] = max(self._peaks[i] * 0.994 - 0.0006, h / max(1, ymax))
-            pi = int(max(dot_h + 1, self._peaks[i] * ymax))
+            pi = int(self._peaks[i] * ymax)  # 不做下限钳制：无声列峰值帽归零不显示
             if geom[i, 0] != h:  # 中轴对称：向上向下各伸展 h
                 geom[i, 0] = h
                 if h >= 1:
                     c.coords(self._items_bar[i], x, cy - h, x + w, cy + h)
                 else:
                     c.coords(self._items_bar[i], x, cy, x + w, cy)
-            if geom[i, 1] != pi:  # 点状峰值帽
+            if geom[i, 1] != pi:  # 点状峰值帽（无声列塌缩为中轴零尺寸=不可见）
                 geom[i, 1] = pi
-                c.coords(self._items_pk[i][0], x, cy - pi - dot_h, x + w, cy - pi)
-                c.coords(self._items_pk[i][1], x, cy + pi, x + w, cy + pi + dot_h)
+                if pi >= 1:
+                    c.coords(self._items_pk[i][0], x, cy - pi - dot_h, x + w, cy - pi)
+                    c.coords(self._items_pk[i][1], x, cy + pi, x + w, cy + pi + dot_h)
+                else:
+                    c.coords(self._items_pk[i][0], x, cy, x + w, cy)
+                    c.coords(self._items_pk[i][1], x, cy, x + w, cy)
         self.win.after(16, self._frame)
