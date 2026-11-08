@@ -333,15 +333,15 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
             sh = sub_font.size * len(sub_lines) + sub_gap * (len(sub_lines) - 1)
             ty = cy + (ch - (th + block_gap + sh)) // 2
             tr, tg, tb = _hex_rgb(cfg.get("title_color"), (255, 255, 255))
-            sr, sg, sb = _hex_rgb(cfg.get("sub_color"), (235, 238, 245))
+            sr, sg, sb = _hex_rgb(cfg.get("sub_color"), (255, 255, 255))
             for ln in lines:
                 _draw_shadow_text(layer, (tx, ty), ln, title_font, fill=(tr, tg, tb, 255),
                                   stroke_width=title_stroke, shadow=shadow)
                 ty += title_font.size + line_gap
             ty += block_gap
             for s in sub_lines:
-                _draw_shadow_text(layer, (tx, ty), s, sub_font, fill=(sr, sg, sb, 205),
-                                  shadow=shadow, stroke_width=sub_stroke)
+                _draw_shadow_text(layer, (tx, ty), s, sub_font, fill=(sr, sg, sb, 255),
+                                  stroke_width=sub_stroke, shadow=shadow)
                 ty += sub_font.size + sub_gap
             anchor = (tx, ty - sub_gap)  # 专辑行文字底部
             bg.alpha_composite(layer)

@@ -208,7 +208,7 @@ class SettingsWindow:
             return var
 
         self.title_color_var = color_row("歌名颜色", "title_color", "#FFFFFF")
-        self.sub_color_var = color_row("副行颜色", "sub_color", "#EDEEF5")
+        self.sub_color_var = color_row("副行颜色", "sub_color", "#FFFFFF")
 
         ttk.Button(self.win, text="保存", command=self._save).grid(row=row, column=0, columnspan=2, pady=8)
 
