@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
@@ -73,19 +74,96 @@ def get_monitors() -> list[dict]:
     return monitors
 
 
-def _load_font(bold: bool, size: int, font_file: str | None = None) -> ImageFont.FreeTypeFont:
-    fonts_dir = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
-    if font_file:  # 用户指定字体（标题用描边加粗）
+_STYLE_WORDS = {"regular", "bold", "light", "medium", "heavy", "black", "italic", "oblique",
+                "thin", "semibold", "extrabold", "extra-bold", "粗体", "常规", "细体", "中等", "标准"}
+_FONT_ENTRIES: list[tuple[str, str]] | None = None  # [(注册标签, 文件名/全路径)]
+
+
+def _font_entries() -> list[tuple[str, str]]:
+    """注册表枚举已装字体（进程内缓存一次）。"""
+    global _FONT_ENTRIES
+    if _FONT_ENTRIES is not None:
+        return _FONT_ENTRIES
+    import winreg
+    out: dict[tuple[str, str], None] = {}
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
         try:
-            return ImageFont.truetype(os.path.join(fonts_dir, font_file), size)
+            key = winreg.OpenKey(hive, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts")
+        except OSError:
+            continue
+        with key:
+            i = 0
+            while True:
+                try:
+                    name, fname, _ = winreg.EnumValue(key, i)
+                except OSError:
+                    break
+                i += 1
+                fname = str(fname).strip()
+                if not fname.lower().endswith((".ttf", ".ttc", ".otf")):
+                    continue
+                label = re.sub(r"\s*[（(](TrueType|OpenType)[^)）]*[)）]\s*$", "", str(name)).strip()
+                if label:
+                    out.setdefault((label, fname))
+    _FONT_ENTRIES = sorted(out)
+    return _FONT_ENTRIES
+
+
+def _bold_variant(font_file: str) -> str | None:
+    """在同家族里找真实 Bold 字面文件；找不到返回 None。结果按进程缓存。"""
+    cache = getattr(_bold_variant, "_cache", None)
+    if cache is None:
+        cache = _bold_variant._cache = {}
+    if font_file in cache:
+        return cache[font_file]
+    result = None
+    base = os.path.basename(font_file).lower()
+    for label, fname in _font_entries():
+        if os.path.basename(fname).lower() == base:
+            family = " ".join(w for w in label.split() if w.lower().strip("-") not in _STYLE_WORDS)
+            break
+    else:
+        family = None
+    if family:
+        for label, fname in _font_entries():
+            if fname == font_file:
+                continue
+            low = label.lower()
+            if low.startswith(family.lower()) and "bold" in low:
+                result = fname
+                break
+    cache[font_file] = result
+    return result
+
+
+def _load_font(bold: bool, size: int, font_file: str | None = None) -> tuple[ImageFont.FreeTypeFont, bool]:
+    """返回 (font, real_bold)。real_bold=True 表示已是真实粗体（粗体字面/可变字体实例），无需描边。"""
+    fonts_dir = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+    if font_file:
+        if bold:  # 1) 同家族真实 Bold 字面
+            bf = _bold_variant(font_file)
+            if bf:
+                try:
+                    return ImageFont.truetype(bf if os.path.isabs(bf) else os.path.join(fonts_dir, bf), size), True
+                except OSError:
+                    pass
+        try:
+            font = ImageFont.truetype(font_file if os.path.isabs(font_file) else os.path.join(fonts_dir, font_file), size)
+            if bold:  # 2) 可变字体 Bold 实例
+                try:
+                    font.set_variation_by_name("Bold")
+                    return font, True
+                except Exception:
+                    pass
+            return font, False  # 3) 交给调用方轻描边
         except OSError:
             pass
     for name in (("msyhbd.ttc", "msyh.ttc") if bold else ("msyh.ttc", "msyhbd.ttc")):
         try:
-            return ImageFont.truetype(os.path.join(fonts_dir, name), size)
+            return ImageFont.truetype(os.path.join(fonts_dir, name), size), bold
         except OSError:
             continue
-    return ImageFont.load_default(size)
+    return ImageFont.load_default(size), False
 
 
 def _cover_fit(im: Image.Image, w: int, h: int) -> Image.Image:
@@ -145,16 +223,14 @@ def _wrap_title(draw, text, font, max_w):
 
 
 def _draw_shadow_text(layer, xy, text, font, fill=(255, 255, 255, 255), anchor="la",
-                      shadow_alpha=140, stroke_width=0, shadow=True, bold_extra=0):
+                      shadow_alpha=140, stroke_width=0, shadow=True):
     d = ImageDraw.Draw(layer)
     x, y = xy
     off = max(2, font.size // 24)
     if shadow:
         d.text((x + off, y + off), text, font=font, fill=(0, 0, 0, shadow_alpha), anchor=anchor,
                stroke_width=stroke_width)
-    d.text((x, y), text, font=font, fill=fill, anchor=anchor,
-           stroke_width=stroke_width + bold_extra,
-           stroke_fill=fill if bold_extra else None)
+    d.text((x, y), text, font=font, fill=fill, anchor=anchor, stroke_width=stroke_width)
 
 
 def _rounded(im: Image.Image, radius: int) -> Image.Image:
@@ -223,12 +299,11 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
             title_bold = bool(cfg.get("title_bold", True))
             sub_bold = bool(cfg.get("sub_bold", False))
             shadow = bool(cfg.get("text_shadow", True))
-            title_font = _load_font(title_bold, int(h * cfg["title_size_ratio"]), title_font_file)
-            sub_font = _load_font(sub_bold, int(h * cfg["sub_size_ratio"]), sub_font_file)
-            # 加粗实现：默认字体走真实粗体字面；自定义字体用同色描边模拟
-            title_stroke = 1 if (title_bold and not title_font_file) else 0
-            title_bold_extra = 2 if (title_bold and title_font_file) else 0
-            sub_bold_extra = 2 if (sub_bold and sub_font_file) else 0
+            title_font, title_real = _load_font(title_bold, int(h * cfg["title_size_ratio"]), title_font_file)
+            sub_font, sub_real = _load_font(sub_bold, int(h * cfg["sub_size_ratio"]), sub_font_file)
+            # 加粗降级链：真实粗体字面/可变字体实例 → 无则 1px 轻描边（重描边会把宋体类细横画肿掉）
+            title_stroke = 1 if (title_bold and not title_real) else 0
+            sub_stroke = 1 if (sub_bold and not sub_real) else 0
             title = meta.get("title") or "未知曲目"
             lines = _wrap_title(ImageDraw.Draw(layer), title, title_font, tw_max)
             artist = meta.get("artist") or "未知艺术家"
@@ -248,12 +323,12 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
             ty = cy + (ch - (th + block_gap + sh)) // 2
             for ln in lines:
                 _draw_shadow_text(layer, (tx, ty), ln, title_font, stroke_width=title_stroke,
-                                  shadow=shadow, bold_extra=title_bold_extra)
+                                  shadow=shadow)
                 ty += title_font.size + line_gap
             ty += block_gap
             for s in sub_lines:
                 _draw_shadow_text(layer, (tx, ty), s, sub_font, fill=(235, 238, 245, 205),
-                                  shadow=shadow, bold_extra=sub_bold_extra)
+                                  shadow=shadow, stroke_width=sub_stroke)
                 ty += sub_font.size + sub_gap
             anchor = (tx, ty - sub_gap)  # 专辑行文字底部
             bg.alpha_composite(layer)
