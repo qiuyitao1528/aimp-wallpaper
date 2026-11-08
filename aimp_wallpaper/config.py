@@ -61,6 +61,9 @@ DEFAULTS = {
     "vis_hidden": False,
     "vis_locked": False,        # 锁定频谱面板：仅禁拖动，仍跟随锚点
     "vis_fps": 30,              # 频谱刷新率（10~120）
+    "lyrics_hidden": False,     # 隐藏歌词（显示在频谱面板下方）
+    "lyrics_locked": False,     # 锁定歌词：仅禁拖动，仍跟随
+    "lyrics_pos": None,         # 歌词手动位置
     "widget_hidden": False,     # 隐藏桌面音乐控件
     "bg_style": "blur",         # 背景方案：blur=高斯模糊 / blur_vignette=模糊+暗角 / sharp=原图铺满 / gradient=主色渐变
     # 原壁纸（首次运行自动记录，restore 用）

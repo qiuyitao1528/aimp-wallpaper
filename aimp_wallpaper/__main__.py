@@ -15,6 +15,7 @@ from ctypes import wintypes
 
 from . import applog, config, wallpaper
 from .aimp_api import AimpIPC
+from .lyrics import LyricsFetcher, LyricsWindow
 from .tray import Tray
 from .vis_panel import VisPanel
 from .widget import Widget
@@ -156,6 +157,7 @@ def main():
     root.report_callback_exception = lambda t, v, tb: applog.log_exc("Tk 回调异常:\n", t, v, tb)
 
     panel = {"obj": None}
+    lyrics = {"obj": None}
 
     def show_vis():
         applog.log("show_vis")
@@ -195,6 +197,20 @@ def main():
         config.save(cfg)
         applog.log(f"控件显隐切换: widget_hidden={cfg.get('widget_hidden')}")
 
+    def toggle_lyrics():
+        cfg["lyrics_hidden"] = not bool(cfg.get("lyrics_hidden"))
+        config.save(cfg)
+        applog.log(f"歌词显隐切换: lyrics_hidden={cfg.get('lyrics_hidden')}")
+
+    def get_panel_pos():
+        p = panel["obj"]
+        if p is not None and not cfg.get("vis_hidden"):
+            try:
+                return p._screen_pos()
+            except Exception:
+                return None
+        return None
+
     def restore_wp():
         def _do():
             import comtypes
@@ -229,8 +245,12 @@ def main():
         _real_destroy()
 
     root.destroy = _quit_app  # 兜住小部件/面板右键的退出路径
+    lyrics["obj"] = LyricsWindow(root, ipc, cfg, get_panel_pos)
+    LyricsFetcher(ipc, cfg, lambda lines: lyrics["obj"].set_lines(lines)).start()
+
     tray = Tray(root, on_settings=open_settings, on_toggle_vis=toggle_vis,
-                on_toggle_widget=toggle_widget, on_restore=restore_wp, on_quit=_quit_app)
+                on_toggle_widget=toggle_widget, on_toggle_lyrics=toggle_lyrics,
+                on_restore=restore_wp, on_quit=_quit_app)
     atexit.register(lambda: tray.stop())  # 崩溃退出时兜底收托盘图标
     gc.freeze()  # 启动期对象移入永久代，进一步降低运行期 GC 成本
     applog.log("进入 mainloop")

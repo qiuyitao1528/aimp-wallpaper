@@ -172,6 +172,8 @@ class SettingsWindow:
         add(pg, "刷新率(FPS)", ttk.Combobox(pg, textvariable=self.fps_var, width=8, values=FPS_CHOICES))
         self.lock_var = tk.BooleanVar(value=bool(cfg.get("vis_locked")))
         add(pg, None, ttk.Checkbutton(pg, text="锁定频谱面板（禁拖动，仍跟随壁纸）", variable=self.lock_var))
+        self.lyrics_var = tk.BooleanVar(value=not bool(cfg.get("lyrics_hidden")))
+        add(pg, None, ttk.Checkbutton(pg, text="显示歌词（频谱面板下方）", variable=self.lyrics_var))
 
         # ================= 控件 =================
         pg = self._pages["控件"]
@@ -252,6 +254,7 @@ class SettingsWindow:
         self.cfg["title_bold"] = self.tbold_var.get()
         self.cfg["sub_bold"] = self.sbold_var.get()
         self.cfg["vis_locked"] = self.lock_var.get()
+        self.cfg["lyrics_hidden"] = not self.lyrics_var.get()
         self.cfg["widget_hidden"] = not self.widget_var.get()
         self.cfg["restore_on_quit"] = self.restore_var.get()
         config.save(self.cfg)
