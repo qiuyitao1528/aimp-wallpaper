@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+build/
+build-setup/
+dist/
+dist-setup/
+config.json
+*.log
+installer-test.iss
+scripts/*.png
+scripts/*.img
+scripts/portable-config-backup*.json

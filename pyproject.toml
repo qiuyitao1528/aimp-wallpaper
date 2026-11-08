@@ -1,0 +1,20 @@
+[project]
+name = "aimp-wallpaper"
+version = "0.1.1"
+description = "桌面壁纸跟随 AIMP 播放：专辑封面海报式壁纸 + 桌面音乐控件小部件"
+requires-python = ">=3.12"
+dependencies = [
+    "pillow>=11.0",
+    "comtypes>=1.4",
+    "numpy>=2.5.4",
+    "pyaudiowpatch>=0.2.12.9",
+    "pystray>=0.19.5",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.22.3",
+]
