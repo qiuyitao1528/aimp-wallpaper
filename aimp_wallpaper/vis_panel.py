@@ -26,7 +26,6 @@ FRAME_MS = 33   # 30fps：频谱数据本身 ~23Hz，30fps 已平滑且 CPU/桌�
 BAR_FALL = 0.81     # 条衰减系数/帧（30fps，等效旧 60fps 的 0.90）
 PEAK_FALL = 0.99    # 峰值帽衰减系数/帧
 PEAK_DROP = 0.0024  # 峰值帽线性下坠/帧
-BLUR_KEEP = 0.6     # 动态模糊：显示态保留权重（帧融合，掩盖偶发掉帧跳变）
 
 _BAR = "#FFFFFF"
 _PEAK = "#FFFFFF"
@@ -81,7 +80,6 @@ class VisPanel:
                 self.canvas.create_rectangle(x, cy0, x + w, cy0, fill=_PEAK, outline="", width=0,
                                              state="hidden")))
         self._disp = np.zeros(self.n_bands)          # UI 层包络值
-        self._shown = np.zeros(self.n_bands)         # 动态模糊后的显示值
         self._peaks = np.zeros(self.n_bands)
         self._geom = np.zeros((self.n_bands, 2), dtype=int)  # [h, p] 整数缓存，未变不重绘
         self._anchor_cache = None
@@ -270,14 +268,12 @@ class VisPanel:
         smooth = prev_t[:self.n_bands] + (target[:self.n_bands] - prev_t[:self.n_bands]) * alpha
         # 攻/衰包络在 UI 层按帧率做：立即攻、指数衰
         self._disp = np.maximum(smooth, self._disp * BAR_FALL)
-        # 动态模糊：显示态向包络值缓动（时间域帧融合，零额外绘制成本）
-        self._shown = self._shown * BLUR_KEEP + self._disp * (1.0 - BLUR_KEEP)
         cy = self.H // 2
         ymax = (self.H // 2) - self.pad - int(2 * self.s)
         dot_h = max(1, int(self.s))
         geom = self._geom
         for i, (x, w) in enumerate(self._layout):
-            h = int(min(1.0, max(0.0, float(self._shown[i]))) * ymax)
+            h = int(min(1.0, max(0.0, float(self._disp[i]))) * ymax)
             self._peaks[i] = max(self._peaks[i] * PEAK_FALL - PEAK_DROP, h / max(1, ymax))
             pi = int(self._peaks[i] * ymax)  # 不做下限钳制：无声列完全隐藏
             if h >= 1:  # 中轴对称：向上向下各伸展 h
