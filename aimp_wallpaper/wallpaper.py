@@ -326,7 +326,8 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                                 1 if cfg.get("title_overflow", "wrap") == "ellipsis" else 2)
             artist = meta.get("artist") or "未知艺术家"
             album = meta.get("album") or ""
-            sub_entries = [artist] + ([album] if album and album != artist else [])
+            # 歌手/专辑同名也各占一行（此前同名被当重复吞掉，用户报为 bug）
+            sub_entries = [artist] + ([album] if album else [])
             sub_draw = ImageDraw.Draw(layer)
             sub_wrap = cfg.get("sub_overflow", "ellipsis") == "wrap"
             sub_lines = []
