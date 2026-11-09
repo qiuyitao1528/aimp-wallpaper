@@ -699,6 +699,20 @@ def _format_info(cfg: dict, meta: dict) -> str:
     return out
 
 
+def _anchor_cx(anchor: str, cx: int, slot_w: int, cw: int) -> int:
+    """封面缩放基准 → 封面左缘 x。
+
+    left=左缘钉在 cx；right=右缘钉在槽位右端（cx+slot_w）；center=槽位居中向两边伸展；
+    center_bound=同 center，但左缘一旦到边线（cx）即停、增长只向右。
+    """
+    if anchor == "right":
+        return cx + slot_w - cw
+    if anchor in ("center", "center_bound"):
+        x = cx + (slot_w - cw) // 2
+        return max(cx, x) if anchor == "center_bound" else x
+    return cx
+
+
 def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: dict,
                   want_anchor: bool = False, bg: Image.Image | None = None, paused: bool = False):
     """渲染海报。want_anchor=True 时返回 (img, anchor)，anchor=(文字区左缘x, 专辑行底部y)。
@@ -722,10 +736,13 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
 
     # 前景清晰封面：保持原分辨率 1:1（绝不放大），超屏才等比缩小；不裁剪、不拉伸
     cx = int(h * cfg["cover_margin_ratio"]) + int(cfg.get("cover_offset_x", 0) or 0)
+    max_h = int(h * 0.82)
+    max_w = int(w * 0.52)
+    anchor = cfg.get("cover_anchor", "left")  # 缩放基准：left=左缘固定（向右伸缩）/
+    # right=右缘固定（向左伸缩，文字区恒定）/ center=槽位居中向两边伸展 /
+    # center_bound=居中伸展但左缘到边线即停、只向右
     if cover is not None:
         iw, ih = cover.size
-        max_h = int(h * 0.82)
-        max_w = int(w * 0.52)
         fit = min(1.0, max_h / ih, max_w / iw)
         user_scale = max(0.3, min(2.0, float(cfg.get("cover_scale", 1.0) or 1.0)))
         if _pause_on and cfg.get("pause_shrink"):
@@ -737,6 +754,7 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
             cover = cover.resize((max(1, int(iw * scale)), max(1, int(ih * scale))), Image.LANCZOS)
         cw, ch = cover.size
         cy = (h - ch) // 2 + int(cfg.get("cover_offset_y", 0) or 0)
+        cover_x = _anchor_cx(anchor, cx, max_w, cw)
         rad = int(cfg.get("cover_radius", 0) or 0)
         if rad <= 0:  # 0=自动：沿用写死时代的短边/60
             rad = max(6, min(cw, ch) // 60)
@@ -753,32 +771,35 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                 radius=max(2, rad // k), fill=(0, 0, 0, sa))
             shadow = shadow.filter(ImageFilter.GaussianBlur(18 / k))
             shadow = shadow.resize((cw + 2 * so, ch + 2 * so), Image.BILINEAR)
-            bg.alpha_composite(shadow, (cx - so, cy - so))
+            bg.alpha_composite(shadow, (cover_x - so, cy - so))
         csw = max(0, min(8, int(cfg.get("cover_stroke_w", 0) or 0)))
         if csw:  # 封面描边画在 fg 圆角边界上
             csrgb = _hex_rgb(cfg.get("cover_stroke_color"), (0, 0, 0))
             ImageDraw.Draw(fg).rounded_rectangle([0, 0, cw - 1, ch - 1], radius=rad,
                                                  outline=(*csrgb, 255), width=csw)
-        bg.alpha_composite(fg, (cx, cy))
+        bg.alpha_composite(fg, (cover_x, cy))
     else:
         ch = int(int(h * cfg["cover_height_ratio"]) *
                  max(0.3, min(2.0, float(cfg.get("cover_scale", 1.0) or 1.0))))
         cw = ch
         cy = (h - ch) // 2 + int(cfg.get("cover_offset_y", 0) or 0)
+        cover_x = _anchor_cx(anchor, cx, max_w, cw)
         d = ImageDraw.Draw(bg)
-        d.rounded_rectangle([cx, cy, cx + cw, cy + ch], radius=max(8, ch // 60),
+        d.rounded_rectangle([cover_x, cy, cover_x + cw, cy + ch], radius=max(8, ch // 60),
                             fill=(40, 44, 58, 255), outline=(90, 96, 120, 255), width=2)
         try:
             nf = ImageFont.truetype(os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", "seguisym.ttf"),
                                     ch // 8)
-            d.text((cx + cw / 2, cy + ch / 2), "♪", font=nf, fill=(150, 158, 178, 255), anchor="mm")
+            d.text((cover_x + cw / 2, cy + ch / 2), "♪", font=nf, fill=(150, 158, 178, 255), anchor="mm")
         except OSError:
             pass
 
     # 右侧文字区（歌名/歌手/专辑三行各自独立样式：字号/字体/颜色/加粗/过长/阴影/描边）
     anchor = None
     if cfg["show_text"]:
-        tx = cx + cw + int(h * 0.055) + int(cfg.get("text_offset_x", 0) or 0)
+        # 左缘基准：文字紧跟封面右缘（随封面尺寸移动）；右缘基准：文字固定在槽位右端
+        tx = (cx + max_w if anchor == "right" else cover_x + cw) + int(h * 0.055) \
+            + int(cfg.get("text_offset_x", 0) or 0)
         tw_max = w - tx - int(w * 0.06)
         # 单行硬上限：从文字起点到屏幕右缘留 2% 边距（吸收超它就放弃，绝不出屏）
         line_limit = max(tw_max, w - tx - int(w * 0.02))

@@ -39,6 +39,7 @@ DEFAULTS = {
     "cover_offset_x": 0,        # 封面 X 偏移(像素，可为负)
     "cover_offset_y": 0,        # 封面 Y 偏移(像素，可为负)
     "cover_scale": 1.0,         # 封面大小倍率 0.3~2.0
+    "cover_anchor": "left",     # 封面基准边 left=左缘固定（向右伸展）/ right=右缘固定（向左伸展，文字位置恒定）
     "cover_radius": 0,          # 封面圆角半径（0=自动=短边/60）
     "cover_shadow_alpha": 130,  # 封面阴影浓度（0=无阴影）
     "cover_shadow_offset": 40,  # 封面阴影外扩偏移(像素)

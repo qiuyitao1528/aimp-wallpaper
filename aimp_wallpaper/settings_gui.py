@@ -25,6 +25,7 @@ COVER_RADIUS_ITEMS = [("自动", 0), ("4", 4), ("8", 8), ("12", 12),
 SHADOW_ALPHA_CHOICES = [0, 40, 70, 100, 130, 160, 200]
 PAUSE_MODE_ITEMS = [("关", "off"), ("压暗", "darken"), ("角标", "badge"), ("压暗+角标", "both")]
 PAUSE_SCOPE_ITEMS = [("整幅", "all"), ("仅背景", "bg")]
+COVER_ANCHOR_ITEMS = [("左侧", "left"), ("右侧", "right"), ("居中", "center"), ("居中·左到线", "center_bound")]
 NIGHT_ALPHA_CHOICES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]
 OVERFLOW_ITEMS = [("换行", "wrap"), ("省略号", "ellipsis")]
 SPACE_WRAP_ITEMS = [("关", "0"), ("2", "2"), ("3", "3"), ("4", "4"),
@@ -172,6 +173,8 @@ class SettingsWindow:
         self.cover_sc_var = self._color_row(add, pg, "封面描边色", "cover_stroke_color", "#000000")
         self.cover_scale_var = combo(pg, "封面大小(倍率)", SCALE_CHOICES,
                                      cfg.get("cover_scale", 1.0) or 1.0)
+        self.cover_anchor_var = labeled(pg, "封面基准", COVER_ANCHOR_ITEMS,
+                                        cfg.get("cover_anchor", "left"))
         self.pause_mode_var = labeled(pg, "暂停显示", PAUSE_MODE_ITEMS,
                                       cfg.get("pause_mode", "darken"))
         self.pause_dark_var = combo(pg, "暂停压暗浓度(%)", NIGHT_ALPHA_CHOICES,
@@ -309,6 +312,7 @@ class SettingsWindow:
         self.cfg["pause_shrink"] = self.pause_shrink_var.get()
         self._int(self.pause_shrink_pct_var, "pause_shrink_pct", 0, 50)
         self._float(self.cover_scale_var, "cover_scale", 0.3, 2.0)
+        self.cfg["cover_anchor"] = dict(COVER_ANCHOR_ITEMS).get(self.cover_anchor_var.get(), "left")
         self._int(self.cover_dx_var, "cover_offset_x", -2000, 2000)
         self._int(self.cover_dy_var, "cover_offset_y", -2000, 2000)
         for key, v in self._line_vars.items():

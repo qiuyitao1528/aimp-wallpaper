@@ -272,6 +272,7 @@ win.pause_scope_var.set("仅背景")
 win.pause_shrink_var.set(True)
 win.pause_shrink_pct_var.set("20")
 win.lyr_show_var.set(True)
+win.cover_anchor_var.set("右侧")
 win._save()
 root.destroy()
 with open(config.CONFIG_PATH, encoding="utf-8") as f:
@@ -299,6 +300,7 @@ check("gui save pause scope/shrink", saved.get("pause_darken_scope") == "bg"
       and saved.get("pause_shrink") is True and saved.get("pause_shrink_pct") == 20,
       f"{saved.get('pause_darken_scope')}/{saved.get('pause_shrink')}/{saved.get('pause_shrink_pct')}")
 check("gui save lyrics show", saved.get("lyrics_hidden") is False)
+check("gui save cover anchor", saved.get("cover_anchor") == "right", saved.get("cover_anchor"))
 
 print()
 
@@ -452,6 +454,36 @@ check("no pause matches base", abs(arr(wallpaper.render_poster(
     cover, meta, W, H, cfg_c, paused=False)).mean() - base_c.mean()) < 0.001)
 
 
+# 封面基准（左/右）：右缘基准下文字 tx 恒定（不同宽高比封面/暂停缩小都不动）
+meta_a = {"title": "T", "artist": "A", "album": "AL"}
+cfg_a = dict(config.DEFAULTS)
+cfg_a.update(bg_style="blur", blur_radius=60, darken=0.75, show_text=True, theme_night_follow=False)
+sq = synth_cover()
+wide_im = Image.new("RGB", (1600, 800), (30, 60, 120))
+ImageDraw.Draw(wide_im).rectangle([0, 0, 799, 799], fill=(200, 80, 60))
+wa_np = np.asarray(wide_im).copy()
+wa_np[:, -3:] = (255, 0, 0)
+wide_im = Image.fromarray(wa_np)  # 右缘红色标记条（PIL 不支持 numpy 式赋值）
+buf_w = io.BytesIO(); wide_im.save(buf_w, "PNG"); wide = buf_w.getvalue()
+_, anch_l_sq = wallpaper.render_poster(sq, meta_a, W, H, cfg_a, want_anchor=True)
+_, anch_l_w = wallpaper.render_poster(wide, meta_a, W, H, cfg_a, want_anchor=True)
+check("left anchor tx varies", anch_l_sq[0] != anch_l_w[0], f"sq={anch_l_sq[0]} wide={anch_l_w[0]}")
+_, anch_r_sq = wallpaper.render_poster(sq, meta_a, W, H, {**cfg_a, "cover_anchor": "right"}, want_anchor=True)
+_, anch_r_w = wallpaper.render_poster(wide, meta_a, W, H, {**cfg_a, "cover_anchor": "right"}, want_anchor=True)
+check("right anchor tx fixed", anch_r_sq[0] == anch_r_w[0], f"sq={anch_r_sq[0]} wide={anch_r_w[0]}")
+_, anch_r_shrunk = wallpaper.render_poster(sq, meta_a, W, H,
+                                           {**cfg_a, "cover_anchor": "right", "pause_mode": "darken",
+                                            "pause_shrink": True, "pause_shrink_pct": 20},
+                                           want_anchor=True, paused=True)
+check("right anchor shrink keeps tx", anch_r_shrunk[0] == anch_r_sq[0], f"{anch_r_shrunk[0]}")
+img_r = wallpaper.render_poster(wide, meta_a, W, H, {**cfg_a, "cover_anchor": "right"})
+rr = np.asarray(img_r, dtype=np.int16)
+red = (rr[:, :, 0] > 220) & (rr[:, :, 1] < 60) & (rr[:, :, 2] < 60)
+xs = np.where(red.any(axis=0))[0]
+expect_r = int(1080 * 0.12) + int(W * 0.52)  # cx=左缘基准线(129)+槽宽
+check("right edge at slot", len(xs) and abs(int(xs.max()) - expect_r) <= 8,
+      f"edge={int(xs.max()) if len(xs) else -1} expect={expect_r}")
+
 # 压暗范围：仅背景=文字保持纯白；整幅=文字压暗
 cfg_bgs = {**cfg_c, "pause_mode": "darken", "pause_darken": 40, "pause_darken_scope": "bg"}
 a_bg = arr(wallpaper.render_poster(cover, meta, W, H, cfg_bgs, paused=True))
@@ -563,6 +595,38 @@ with open(config.CONFIG_PATH, encoding="utf-8") as f:
     saved2 = json.load(f)
 check("gui save template", saved2.get("info_template") == "{format} {bits}", saved2.get("info_template"))
 root4.destroy()
+
+print()
+
+# ---------- K. 封面缩放基准四模式 ----------
+from aimp_wallpaper.wallpaper import _anchor_cx  # noqa: E402
+
+check("anchor left", _anchor_cx("left", 190, 998, 1062) == 190)
+check("anchor right grown", _anchor_cx("right", 190, 998, 1062) == 126)
+check("anchor right shrink", _anchor_cx("right", 190, 998, 885) == 303)
+check("anchor center grown", _anchor_cx("center", 190, 998, 1062) == 158)
+check("anchor center shrink", _anchor_cx("center", 190, 998, 885) == 246)
+check("anchor center_bound clamp", _anchor_cx("center_bound", 190, 998, 1062) == 190)
+check("anchor center_bound no clamp", _anchor_cx("center_bound", 190, 998, 885) == 246)
+
+# 渲染级：四种基准下的文字起点 tx
+cfg_a = dict(config.DEFAULTS)
+cfg_a.update(bg_style="blur", blur_radius=60, darken=0.75, show_text=True,
+             theme_night_follow=False, cover_scale=1.2, pause_shrink=False)
+cw_r = int(900 * min(1.0, int(1080 * 0.82) / 900, int(1920 * 0.52) / 900) * 1.2)
+cx0 = int(1080 * 0.12) + 0
+gap_x = int(1080 * 0.055)
+exp_tx = {
+    "left": cx0 + cw_r + gap_x,
+    "right": cx0 + int(1920 * 0.52) + gap_x,
+    "center": cx0 + (int(1920 * 0.52) - cw_r) // 2 + cw_r + gap_x,
+    "center_bound": cx0 + cw_r + gap_x,
+}
+for a_mode in ("left", "right", "center", "center_bound"):
+    _img_a, anch_a = wallpaper.render_poster(cover, meta, W, H,
+                                             {**cfg_a, "cover_anchor": a_mode}, want_anchor=True)
+    check(f"anchor tx {a_mode}", abs(anch_a[0] - exp_tx[a_mode]) <= 3,
+          f"tx={anch_a[0]} exp={exp_tx[a_mode]}")
 
 print()
 print("RESULT:", "ALL_PASS" if not FAILS else f"FAILED={FAILS}")
