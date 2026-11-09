@@ -50,10 +50,6 @@ DEFAULTS = {
     "restore_on_quit": True,    # 退出时恢复原壁纸（设置里可关）
     # 渲染产物目录（%LOCALAPPDATA%）
     "output_dir": os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "aimp-wallpaper"),
-    # 小部件
-    "widget_alpha": 235,        # 0~255
-    "widget_width": 460,
-    "widget_pos": None,         # [x, y] 屏幕坐标；None=底部居中
     # 可视化面板（AIMP 经典白条样式）
     "vis_width": 420,
     "vis_height": 120,

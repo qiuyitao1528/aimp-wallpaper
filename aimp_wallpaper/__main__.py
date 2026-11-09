@@ -16,7 +16,6 @@ from . import applog, config, wallpaper
 from .aimp_api import AimpIPC
 from .tray import Tray
 from .vis_panel import VisPanel
-from .widget import Widget
 
 
 def _set_dpi_aware():
@@ -138,6 +137,7 @@ def main():
 
     root = tk.Tk()
     root.title("AIMP Wallpaper")
+    root.withdraw()  # 无可见主窗（界面=频谱面板+托盘）
     root.report_callback_exception = lambda t, v, tb: applog.log_exc("Tk 回调异常:\n", t, v, tb)
 
     panel = {"obj": None}
@@ -161,7 +161,6 @@ def main():
             panel["obj"] = VisPanel(root, cfg)
         except Exception:
             applog.log_exc("启动建面板失败:\n", *sys.exc_info())
-    Widget(root, ipc, cfg, show_vis=show_vis)
 
     def open_settings():
         from .settings_gui import SettingsWindow

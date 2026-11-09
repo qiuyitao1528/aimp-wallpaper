@@ -163,7 +163,9 @@ def _load_font(bold: bool, size: int, font_file: str | None = None) -> tuple[Ima
             return font, False  # 3) 交给调用方轻描边
         except OSError:
             pass
-    for name in (("msyhbd.ttc", "msyh.ttc") if bold else ("msyh.ttc", "msyhbd.ttc")):
+    # 默认字体链：雅黑 → 雅黑常规 → 黑体 → 宋体 → 等线 → Segoe UI（别的机器可能缺某个）
+    bold_first = ("msyhbd.ttc", "msyh.ttc") if bold else ("msyh.ttc", "msyhbd.ttc")
+    for name in bold_first + ("simhei.ttf", "simsun.ttc", "Deng.ttf", "segoeui.ttf"):
         try:
             return ImageFont.truetype(os.path.join(fonts_dir, name), size), bold
         except OSError:

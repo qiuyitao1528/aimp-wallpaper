@@ -141,13 +141,12 @@ class VisPanel:
     # ---------- 桌面级 z-order ----------
 
     def _seat_above_desktop(self):
-        """把 Progman 压到本窗口下方；z-order 已正确时零跨进程写操作。"""
+        """把 Progman 压到所有覆盖窗口（面板/控件）之下；顺带处理被最小化。
+        z-order 已正确时零跨进程写操作（GetWindow 是无阻塞查询）。"""
         if desktop.user32.IsIconic(self._hwnd):
             desktop.user32.ShowWindow(self._hwnd, 4)  # SW_SHOWNOACTIVATE
-        progman = desktop.user32.FindWindowW("Progman", None)
-        if progman and desktop.user32.GetWindow(progman, desktop.GW_HWNDPREV) != self._hwnd:
-            desktop.user32.SetWindowPos(progman, self._hwnd, 0, 0, 0, 0,
-                                        0x2 | 0x1 | 0x10)  # NOMOVE|NOSIZE|NOACTIVATE
+        desktop.register_overlay(self._hwnd)
+        desktop.seat_overlays()
 
     # ---------- 位置/拖动 ----------
 
