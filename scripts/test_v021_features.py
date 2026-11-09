@@ -98,6 +98,34 @@ wg2 = wallpaper._text_len(draw, "aa (bb", font)
 lg = wallpaper._wrap_title(draw, text_g, font, (wg1 + wg2) / 2, 2, space_window=2, bracket_break=True)
 print("bracket group move:", ascii(lg))
 check("bracket group to next line", lg[0] == "aa" and lg[1].startswith("("), ascii(lg))
+# 吸收宽度上限（2026-11-10 真实事故回归：括号吸收把行顶出屏幕被裁）
+text_r = "aaaa (bbbb) cc"
+wr1 = wallpaper._text_len(draw, "aaaa (bb", font)
+wr2 = wallpaper._text_len(draw, "aaaa (bbb", font)
+wr_full = wallpaper._text_len(draw, "aaaa (bbbb)", font)
+lr = wallpaper._wrap_title(draw, text_r, font, (wr1 + wr2) / 2, 2, space_window=5,
+                           bracket_break=True, line_limit=wr_full - 10)
+print("bracket guard:", ascii(lr))
+check("bracket absorb guarded", lr[0] == "aaaa" and lr[1].startswith("(bbbb"), ascii(lr))
+lr0 = wallpaper._wrap_title(draw, text_r, font, (wr1 + wr2) / 2, 2, space_window=5,
+                            bracket_break=True)
+check("bracket absorb unguarded ok", lr0[0].startswith("aaaa (bbbb"), ascii(lr0))
+ws1 = wallpaper._text_len(draw, "aaaa bbbb", font)
+ws2 = wallpaper._text_len(draw, "aaaa bbbbb", font)
+ls = wallpaper._wrap_title(draw, "aaaa bbbbb ccc", font, (ws1 + ws2) / 2, 2,
+                           space_window=10,
+                           line_limit=wallpaper._text_len(draw, "aaaa bbbbb ", font) - 10)
+print("space guard:", ascii(ls))
+check("space absorb guarded", ls[0] == "aaaa bbbb", ascii(ls))
+# 真实事故：Cry For Me (feat. Ami) (为我哭泣) —— 括号吸收整组超屏幕预算 → 整组下移
+title_r = "Cry For Me (feat. Ami) (为我哭泣)"
+wr_a = wallpaper._text_len(draw, "Cry For Me (feat. Ami) (为我", font)
+wr_b = wallpaper._text_len(draw, "Cry For Me (feat. Ami) (为我哭", font)
+lr2 = wallpaper._wrap_title(draw, title_r, font, (wr_a + wr_b) / 2, 2, space_window=5,
+                            bracket_break=True, line_limit=wr_a + 40)
+print("real case:", ascii(lr2))
+check("real case guarded", len(lr2) == 2 and all(
+    wallpaper._text_len(draw, ln, font) <= wr_a + 40 for ln in lr2), ascii(lr2))
 # 换行模式无省略号：3 行文本 → 3 行全展示，任何一行都不含 …
 text3 = "aaaa bb cc dd ee ff gg"
 w3a = wallpaper._text_len(draw, "aaaa bb", font)

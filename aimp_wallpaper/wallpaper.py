@@ -478,15 +478,19 @@ def _scan_open(seg: str, pos0: int, cur_open: int) -> int:
     return cur_open
 
 
-def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, bracket_break=False):
+def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, bracket_break=False,
+                line_limit=None):
     """超宽处理：按像素宽度折行，最多 max_lines 行（默认 4），超限直接截断、无省略号——
     换行模式就是要看到全文，省略号由 overflow=ellipsis 单行模式负责。
 
     space_window>0：折行点的剩余部分前 space_window 个字符内有空格时，
-    断点移到该空格后（首行允许轻微超宽，避免把短词组切碎）。
+    断点移到该空格后（避免把短词组切碎）。
     bracket_break=True：断点落在括号组内部时——闭合括号就在跟前（space_window
     个字符内）则吸收闭合括号、把组完整留在本行；否则整组挪到下一行（组从行首
     就开始时退回普通断行）。
+    line_limit：单行硬宽度上限（像素，通常=文字起点到屏幕右缘的预算）。空格/括号
+    吸收后若超限则放弃吸收——**任何行都绝不超过屏幕可用宽度**（2026-11-10 修复：
+    括号吸收无宽度上限，CJK 吸 3 字 ≈170px 把行顶出屏幕被裁）。
     """
     if max_lines <= 1:
         return [_ellipsis(draw, text, font, max_w)]
@@ -496,13 +500,17 @@ def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, bracket_br
     i, n = 0, len(text)
     line_start = 0   # 当前正在累积的这一行在原文里的起点
     open_pos = -1    # 本行未闭合的开括号位置（-1=不在括号内）
+
+    def _fits(s):
+        return line_limit is None or _text_len(draw, s, font) <= line_limit
+
     while i < n:
         ch = text[i]
         if cur and _text_len(draw, cur + ch, font) > max_w:
             moved = False
             if bracket_break and open_pos >= 0:
                 close_j = _find_close(text, i, i + space_window) if space_window > 0 else -1
-                if close_j >= 0:
+                if close_j >= 0 and _fits(text[line_start:close_j + 1]):
                     seg = text[i:close_j + 1]  # 小尾巴吸收闭合括号，组完整留在本行
                     cur += seg
                     open_pos = _scan_open(seg, i, open_pos)
@@ -515,7 +523,8 @@ def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, bracket_br
                 # open_pos == line_start（组占满整行）→ 退回普通断行
             if not moved and space_window > 0:
                 j = text.find(" ", i, i + space_window)
-                if j >= 0:  # 吸收到空格（含空格），在空格后直接换行
+                if j >= 0 and _fits(text[line_start:j + 1]):
+                    # 吸收到空格（含空格），在空格后直接换行（超 line_limit 则放弃）
                     seg = text[i:j + 1]
                     cur += seg
                     open_pos = _scan_open(seg, i, open_pos)
@@ -590,11 +599,6 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
     else:
         bg = bg.copy()
 
-    if paused and cfg.get("pause_mode") in ("darken", "both"):
-        pct = max(0, min(95, int(cfg.get("pause_darken", 30) or 0)))
-        if pct:  # 压暗在缓存背景的副本上做，不污染 _BG_CACHE
-            bg.alpha_composite(Image.new("RGBA", bg.size, (0, 0, 0, pct * 255 // 100)))
-
     # 前景清晰封面：保持原分辨率 1:1（绝不放大），超屏才等比缩小；不裁剪、不拉伸
     cx = int(h * cfg["cover_margin_ratio"]) + int(cfg.get("cover_offset_x", 0) or 0)
     if cover is not None:
@@ -651,6 +655,8 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
     if cfg["show_text"]:
         tx = cx + cw + int(h * 0.055) + int(cfg.get("text_offset_x", 0) or 0)
         tw_max = w - tx - int(w * 0.06)
+        # 单行硬上限：从文字起点到屏幕右缘留 2% 边距（吸收超它就放弃，绝不出屏）
+        line_limit = max(tw_max, w - tx - int(w * 0.02))
         if tw_max > h * 0.15:
             layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             draw = ImageDraw.Draw(layer)
@@ -678,7 +684,7 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                     lines = _wrap_title(
                         draw, text, font, tw_max, 4,
                         max(0, min(20, int(cfg.get(f"{g}_space_window", 0) or 0))),
-                        bool(cfg.get(f"{g}_bracket_break", True)))
+                        bool(cfg.get(f"{g}_bracket_break", True)), line_limit)
                 else:
                     lines = [_ellipsis(draw, text, font, tw_max)]
                 blocks.append((g, lines, font, _hex_rgb(cfg.get(f"{g}_color"), (255, 255, 255)),
@@ -723,6 +729,10 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                     ty += font.size + _intra(g)
             anchor = (tx, ty - _intra(blocks[-1][0]))  # 末行文字底部
             bg.alpha_composite(layer)
+    if paused and cfg.get("pause_mode") in ("darken", "both"):
+        pct = max(0, min(95, int(cfg.get("pause_darken", 30) or 0)))
+        if pct:  # 整幅压暗（封面+文字一起变暗，恢复播放即还原）
+            bg.alpha_composite(Image.new("RGBA", bg.size, (0, 0, 0, pct * 255 // 100)))
     if paused and cfg.get("pause_mode") in ("badge", "both"):
         # 「已暂停」角标：屏幕右下角半透明圆角黑底白字（与 show_text 无关）
         d = ImageDraw.Draw(bg)
