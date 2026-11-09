@@ -47,6 +47,9 @@ DEFAULTS = {
     # 暂停状态显示
     "pause_mode": "darken",     # off=不处理 / darken=压暗 / badge=角标 / both
     "pause_darken": 30,         # 暂停压暗浓度（%）
+    "pause_darken_scope": "all",  # 压暗范围 all=整幅 / bg=仅背景
+    "pause_shrink": False,      # 暂停时封面缩小（可选效果）
+    "pause_shrink_pct": 8,      # 封面缩小幅度（%）
     # 每行样式（title=歌名 / artist=歌手 / album=专辑 / info=歌曲信息；sub_* 为旧版迁移源）
     "title_show": True,         # 是否显示歌名
     "artist_show": True,        # 是否显示歌手

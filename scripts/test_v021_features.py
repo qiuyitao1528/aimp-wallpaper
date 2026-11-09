@@ -268,6 +268,9 @@ win.cover_sa_var.set("70")
 win.cover_sw_var.set("2")
 win.pause_mode_var.set("角标")
 win.pause_dark_var.set("50")
+win.pause_scope_var.set("仅背景")
+win.pause_shrink_var.set(True)
+win.pause_shrink_pct_var.set("20")
 win.lyr_show_var.set(True)
 win._save()
 root.destroy()
@@ -292,6 +295,9 @@ check("gui save cover style", saved.get("cover_radius") == 24 and saved.get("cov
       f"{saved.get('cover_radius')}/{saved.get('cover_shadow_alpha')}/{saved.get('cover_stroke_w')}")
 check("gui save pause", saved.get("pause_mode") == "badge" and saved.get("pause_darken") == 50,
       f"{ascii(saved.get('pause_mode'))}/{saved.get('pause_darken')}")
+check("gui save pause scope/shrink", saved.get("pause_darken_scope") == "bg"
+      and saved.get("pause_shrink") is True and saved.get("pause_shrink_pct") == 20,
+      f"{saved.get('pause_darken_scope')}/{saved.get('pause_shrink')}/{saved.get('pause_shrink_pct')}")
 check("gui save lyrics show", saved.get("lyrics_hidden") is False)
 
 print()
@@ -445,6 +451,25 @@ check("pause badge corner", np.abs(corner_b - corner_0).sum() > 5000,
 check("no pause matches base", abs(arr(wallpaper.render_poster(
     cover, meta, W, H, cfg_c, paused=False)).mean() - base_c.mean()) < 0.001)
 
+
+# 压暗范围：仅背景=文字保持纯白；整幅=文字压暗
+cfg_bgs = {**cfg_c, "pause_mode": "darken", "pause_darken": 40, "pause_darken_scope": "bg"}
+a_bg = arr(wallpaper.render_poster(cover, meta, W, H, cfg_bgs, paused=True))
+a_alls = arr(wallpaper.render_poster(cover, meta, W, H,
+                                     {**cfg_bgs, "pause_darken_scope": "all"}, paused=True))
+tzone_bg = a_bg[350:750, 1050:].max()
+tzone_all = a_alls[350:750, 1050:].max()
+check("pause scope bg keeps text", tzone_bg > 250, f"max={tzone_bg:.0f}")
+check("pause scope all dims text", tzone_all < 200, f"max={tzone_all:.0f}")
+# 封面缩小：paused 缩小 vs 不缩小，差异集中在封面区（左半）远大于右侧文字区
+cfg_sh = {**cfg_c, "pause_mode": "darken", "pause_darken": 30, "pause_darken_scope": "all"}
+a_ns = arr(wallpaper.render_poster(cover, meta, W, H, cfg_sh, paused=True))
+a_sh = arr(wallpaper.render_poster(cover, meta, W, H,
+                                   {**cfg_sh, "pause_shrink": True, "pause_shrink_pct": 20}, paused=True))
+d_cover = float(np.abs(a_sh[:, :1000] - a_ns[:, :1000]).mean())
+d_text = float(np.abs(a_sh[:, 1400:] - a_ns[:, 1400:]).mean())
+check("pause shrink cover region", d_cover > d_text * 3 and d_cover > 1.0,
+      f"cover={d_cover:.1f} text={d_text:.2f}")
 
 # LyricsWindow 离屏 smoke（创建→渲染→销毁，窗口立即隐藏）
 class FakeIpc:

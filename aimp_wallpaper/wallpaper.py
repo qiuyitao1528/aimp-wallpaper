@@ -713,6 +713,13 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
     else:
         bg = bg.copy()
 
+    # 暂停反馈（范围可选）：darken=仅背景在此压暗；all=整幅在合成完后再压（见文末）
+    _pause_on = paused and cfg.get("pause_mode") in ("darken", "both")
+    _pct = max(0, min(95, int(cfg.get("pause_darken", 30) or 0)))
+    _scope = cfg.get("pause_darken_scope", "all")
+    if _pause_on and _pct and _scope == "bg":
+        bg.alpha_composite(Image.new("RGBA", bg.size, (0, 0, 0, _pct * 255 // 100)))
+
     # 前景清晰封面：保持原分辨率 1:1（绝不放大），超屏才等比缩小；不裁剪、不拉伸
     cx = int(h * cfg["cover_margin_ratio"]) + int(cfg.get("cover_offset_x", 0) or 0)
     if cover is not None:
@@ -721,6 +728,10 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
         max_w = int(w * 0.52)
         fit = min(1.0, max_h / ih, max_w / iw)
         user_scale = max(0.3, min(2.0, float(cfg.get("cover_scale", 1.0) or 1.0)))
+        if _pause_on and cfg.get("pause_shrink"):
+            # 暂停时封面缩小（可选效果）：在用户倍率基础上再乘 (1 - 幅度%)
+            shrink = max(0, min(50, int(cfg.get("pause_shrink_pct", 8) or 0))) / 100.0
+            user_scale *= max(0.3, 1.0 - shrink)
         scale = fit * user_scale
         if abs(scale - 1.0) > 1e-3:
             cover = cover.resize((max(1, int(iw * scale)), max(1, int(ih * scale))), Image.LANCZOS)
@@ -846,10 +857,9 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                     ty += font.size + _intra(g)
             anchor = (tx, ty - _intra(blocks[-1][0])) if blocks else None  # 末行文字底部（全隐藏时无锚点）
             bg.alpha_composite(layer)
-    if paused and cfg.get("pause_mode") in ("darken", "both"):
-        pct = max(0, min(95, int(cfg.get("pause_darken", 30) or 0)))
-        if pct:  # 整幅压暗（封面+文字一起变暗，恢复播放即还原）
-            bg.alpha_composite(Image.new("RGBA", bg.size, (0, 0, 0, pct * 255 // 100)))
+    if _pause_on and _pct and _scope == "all":
+        # 整幅压暗（封面+文字一起变暗，恢复播放即还原）；仅背景模式已在开头压过
+        bg.alpha_composite(Image.new("RGBA", bg.size, (0, 0, 0, _pct * 255 // 100)))
     if paused and cfg.get("pause_mode") in ("badge", "both"):
         # 「已暂停」角标：屏幕右下角半透明圆角黑底白字（与 show_text 无关）
         d = ImageDraw.Draw(bg)
