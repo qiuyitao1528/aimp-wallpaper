@@ -9,6 +9,8 @@ import io
 import json
 import os
 import re
+import sys
+import time
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
@@ -529,6 +531,7 @@ def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors:
     targets = _filter_monitors(monitors, cfg.get("monitors", "all"))
     paths = []
     anchor = None
+    layers = []          # 新图（供失败回退用）
     for i, m in enumerate(targets):
         bg = _get_bg(cover_bytes, m["w"], m["h"], cfg)
         img, anchor_i = render_poster(cover_bytes, meta, m["w"], m["h"], cfg,
@@ -537,7 +540,6 @@ def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors:
             anchor = anchor_i
         path = os.path.join(out_dir, f"wallpaper_{m['w']}x{m['h']}.png")
         img.save(path, "PNG", optimize=False, compress_level=1)
-        dw.SetWallpaper(m["id"], path)
         jpg = os.path.join(out_dir, f"wallpaper_{m['w']}x{m['h']}.jpg")
         if os.path.exists(jpg):
             try:
@@ -545,6 +547,10 @@ def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors:
             except OSError:
                 pass
         paths.append(path)
+        layers.append((m.get("left", 0), m.get("top", 0), m["w"], m["h"], img))
+
+    for m, path in zip(targets, paths):
+        dw.SetWallpaper(m["id"], path)
     dw.SetPosition(DWPOS_FILL)
     # 可视化面板锚点：屏幕坐标（主屏文字区左缘、专辑行底部下方留一点空隙）
     if anchor and targets:
