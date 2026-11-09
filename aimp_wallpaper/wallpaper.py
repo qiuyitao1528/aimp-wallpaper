@@ -585,6 +585,120 @@ def _hex_rgb(value, default: tuple[int, int, int]) -> tuple[int, int, int]:
     return default
 
 
+# ---------- 歌曲信息行：音频文件头解析（FLAC/WAV/MP3）+ 模板渲染 ----------
+
+_FMT_NAMES = {".flac": "FLAC", ".mp3": "MP3", ".ape": "APE", ".wav": "WAV", ".ogg": "OGG",
+              ".m4a": "M4A", ".aac": "AAC", ".wv": "WV", ".tta": "TTA", ".dsf": "DSF",
+              ".opus": "OPUS", ".wma": "WMA"}
+_AUDIO_INFO_CACHE: dict = {}
+
+
+def _flac_info(data: bytes):
+    """STREAMINFO → (采样率, 位深, 总样本数)。"""
+    if data[:4] != b"fLaC" or len(data) < 42:
+        return None
+    b = data[8:42]  # 跳过块头，STREAMINFO 34 字节
+    sr = (b[10] << 12) | (b[11] << 4) | (b[12] >> 4)
+    bps = (((b[12] & 1) << 4) | (b[13] >> 4)) + 1
+    total = ((b[13] & 0x0F) << 32) | int.from_bytes(b[14:18], "big")
+    return sr, bps, total
+
+
+def _wav_info(data: bytes):
+    """fmt 块 → (采样率, 位深)。"""
+    if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return None
+    i = 12
+    while i + 8 <= len(data):
+        cid = data[i:i + 4]
+        sz = int.from_bytes(data[i + 4:i + 8], "little")
+        if cid == b"fmt " and i + 24 <= len(data):
+            sr = int.from_bytes(data[i + 12:i + 16], "little")
+            bits = int.from_bytes(data[i + 22:i + 24], "little")
+            return sr, bits, None
+        i += 8 + sz + (sz & 1)
+        if sz == 0:
+            break
+    return None
+
+
+_MP3_SR = {3: (44100, 48000, 32000), 2: (22050, 24000, 16000), 0: (11025, 12000, 8000)}
+_MP3_BR = {3: (0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0),
+           2: (0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0)}
+
+
+def _mp3_info(data: bytes):
+    """首帧头 → (采样率, None, 比特率 kbps)。"""
+    i = 0
+    if data[:3] == b"ID3":
+        i = 10 + ((data[6] << 21) | (data[7] << 14) | (data[8] << 7) | data[9])
+    end = min(len(data), i + 8192)
+    while i < end - 4:
+        if data[i] == 0xFF and (data[i + 1] & 0xE0) == 0xE0:
+            ver = (data[i + 1] >> 3) & 0x03
+            layer = (data[i + 1] >> 1) & 0x03
+            sri = (data[i + 2] >> 2) & 0x03
+            bri = (data[i + 2] >> 4) & 0x0F
+            if ver in _MP3_SR and sri != 3 and layer == 1 and bri:
+                return _MP3_SR[ver][sri], None, _MP3_BR[3 if ver == 3 else 2][bri]
+        i += 1
+    return None
+
+
+def _audio_info(path: str, duration_ms) -> dict:
+    """歌曲信息四值（含单位），解析不了的位置用 —。结果按文件路径缓存。"""
+    key = path or ""
+    hit = _AUDIO_INFO_CACHE.get(key)
+    if hit is not None:
+        return hit
+    ext = os.path.splitext(key)[1].lower()
+    fmt = _FMT_NAMES.get(ext, ext[1:].upper() if ext.startswith(".") and len(ext) > 1 else "—")
+    sr = bits = total = None
+    size_ok = bool(key) and os.path.isfile(key)
+    if size_ok:
+        try:
+            with open(key, "rb") as f:
+                head = f.read(65536)
+            parsed = {"flac": _flac_info, "wav": _wav_info}.get(ext[1:])
+            if parsed:
+                sr, bits, total = parsed(head) or (None, None, None)
+            elif ext == ".mp3":
+                sr, bits, _br = _mp3_info(head) or (None, None, None)
+        except OSError:
+            pass
+    br = None
+    if size_ok and duration_ms:
+        try:  # 平均比特率=文件大小×8/时长，对 CBR/VBR/FLAC 都成立
+            br = round(os.path.getsize(key) * 8 / (duration_ms / 1000) / 1000)
+        except OSError:
+            br = None
+    vals = {
+        "format": fmt or "—",
+        "samplerate": (f"{sr / 1000:g} kHz" if sr else "—"),
+        "bitrate": (f"{br} kbps" if br else "—"),
+        "bits": (f"{bits} bit" if bits else "—"),
+        "duration": (f"{(duration_ms or 0) // 60000}:{(duration_ms or 0) % 60000 // 1000:02d}"
+                     if duration_ms else "—"),
+    }
+    if len(_AUDIO_INFO_CACHE) > 4:
+        _AUDIO_INFO_CACHE.clear()
+    _AUDIO_INFO_CACHE[key] = vals
+    return vals
+
+
+def _format_info(cfg: dict, meta: dict) -> str:
+    """按 info_template 渲染歌曲信息行；四值全未知时返回空串（整行隐藏）。"""
+    vals = _audio_info(meta.get("filename") or "", meta.get("duration_ms"))
+    out = str(cfg.get("info_template", "{format} {samplerate} {bitrate} {bits}"))
+    for k, v in vals.items():
+        out = out.replace("{" + k + "}", v)
+    out = re.sub(r"\{[a-z_]+\}", "", out)  # 未识别 token 直接剥掉
+    out = re.sub(r"\s+", " ", out).strip()
+    if out in ("", "—", "— — — —"):
+        return ""
+    return out
+
+
 def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: dict,
                   want_anchor: bool = False, bg: Image.Image | None = None, paused: bool = False):
     """渲染海报。want_anchor=True 时返回 (img, anchor)，anchor=(文字区左缘x, 专辑行底部y)。
@@ -664,9 +778,12 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                 "title": meta.get("title") or "未知曲目",
                 "artist": meta.get("artist") or "未知艺术家",
                 "album": meta.get("album") or "",
+                "info": _format_info(cfg, meta),  # 歌曲信息行（模板渲染，全未知则空=隐藏）
             }
             blocks = []  # (组名, 折行后各行, 字体, 字色RGB, 阴影, 描边宽, 描边色RGB)
-            for g in ("title", "artist", "album"):
+            for g in ("title", "artist", "album", "info"):
+                if not cfg.get(f"{g}_show", True):
+                    continue  # 逐行显示开关
                 text = texts[g]
                 if not text:
                     continue
@@ -727,7 +844,7 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                                       anchor=draw_anchor, shadow=shadow, stroke_width=sw,
                                       stroke_fill=(*srgb, 255) if sw else None)
                     ty += font.size + _intra(g)
-            anchor = (tx, ty - _intra(blocks[-1][0]))  # 末行文字底部
+            anchor = (tx, ty - _intra(blocks[-1][0])) if blocks else None  # 末行文字底部（全隐藏时无锚点）
             bg.alpha_composite(layer)
     if paused and cfg.get("pause_mode") in ("darken", "both"):
         pct = max(0, min(95, int(cfg.get("pause_darken", 30) or 0)))

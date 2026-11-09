@@ -47,7 +47,13 @@ DEFAULTS = {
     # 暂停状态显示
     "pause_mode": "darken",     # off=不处理 / darken=压暗 / badge=角标 / both
     "pause_darken": 30,         # 暂停压暗浓度（%）
-    # 每行样式（title=歌名 / artist=歌手 / album=专辑；sub_* 为旧版迁移源，仅作回退）
+    # 每行样式（title=歌名 / artist=歌手 / album=专辑 / info=歌曲信息；sub_* 为旧版迁移源）
+    "title_show": True,         # 是否显示歌名
+    "artist_show": True,        # 是否显示歌手
+    "album_show": True,         # 是否显示专辑
+    "info_show": True,          # 是否显示歌曲信息行
+    "info_template": "{format} {samplerate} {bitrate} {bits}",  # 歌曲信息模板
+    #   可用 token：{format} {samplerate} {bitrate} {bits} {duration}
     "title_size_ratio": 0.075,  # 歌名字号占屏高比例
     "artist_size_ratio": 0.042, # 歌手字号占屏高比例
     "album_size_ratio": 0.042,  # 专辑字号占屏高比例
@@ -69,6 +75,13 @@ DEFAULTS = {
     "title_stroke_color": "#000000",    # 歌名描边色
     "artist_stroke_color": "#000000",   # 歌手描边色
     "album_stroke_color": "#000000",    # 专辑描边色
+    "info_size_ratio": 0.042,   # 歌曲信息字号占屏高比例（迁移时从专辑行播种）
+    "info_font_file": None,     # 歌曲信息字体文件（None=默认雅黑）
+    "info_shadow": True,        # 歌曲信息阴影
+    "info_stroke_w": 0,         # 歌曲信息描边宽
+    "info_stroke_color": "#000000",  # 歌曲信息描边色
+    "info_bold": False,         # 歌曲信息加粗
+    "info_color": "#FFFFFF",    # 歌曲信息颜色
     "title_bold": True,             # 歌名加粗
     "artist_bold": False,           # 歌手加粗
     "album_bold": False,            # 专辑加粗
@@ -80,14 +93,17 @@ DEFAULTS = {
     "title_overflow": "wrap",       # 歌名过长：wrap=折行（最多 4 行，无省略号）/ ellipsis=单行省略号
     "artist_overflow": "ellipsis",  # 歌手过长（同上）
     "album_overflow": "ellipsis",   # 专辑过长（同上）
+    "info_overflow": "ellipsis",    # 歌曲信息过长（同上）
     "sub_overflow": "ellipsis",     # （旧版）副行过长，迁移源
     "wrap_space_window": 5,     # （旧版）全局空格断行，迁移源
     "title_space_window": 5,    # 歌名空格断行窗口（折行点剩余部分前 N 字符内有空格则断在空格后，0=关）
     "artist_space_window": 5,   # 歌手空格断行窗口
     "album_space_window": 5,    # 专辑空格断行窗口
+    "info_space_window": 0,     # 歌曲信息空格断行窗口（信息行短，默认关）
     "title_bracket_break": True,    # 歌名括号断行：断点落在括号组内时吸收闭合括号或整组下移
     "artist_bracket_break": True,   # 歌手括号断行
     "album_bracket_break": True,    # 专辑括号断行
+    "info_bracket_break": True,     # 歌曲信息括号断行
     # 歌词悬浮窗（样式与壁纸歌名行同源，迁移时从 title_* 播种）
     "lyrics_hidden": False,     # True=隐藏歌词窗
     "lyrics_locked": False,     # 锁定=禁拖动（仍跟随锚点）
@@ -137,6 +153,14 @@ def _migrate(cfg: dict, data: dict) -> None:
                        ("lyrics_shadow", "title_shadow")):
         if lyr not in data:
             cfg[lyr] = cfg.get(title)
+    # 歌曲信息行样式从专辑行播种（首次升级时，之后各自独立）
+    for info_k, alb_k in (("info_size_ratio", "album_size_ratio"),
+                          ("info_font_file", "album_font_file"), ("info_bold", "album_bold"),
+                          ("info_color", "album_color"), ("info_overflow", "album_overflow"),
+                          ("info_shadow", "album_shadow"), ("info_stroke_w", "album_stroke_w"),
+                          ("info_stroke_color", "album_stroke_color")):
+        if info_k not in data:
+            cfg[info_k] = cfg.get(alb_k)
     for new, old in _MIGRATE_FROM_SUB:
         if new not in data:
             cfg[new] = cfg.get(old)

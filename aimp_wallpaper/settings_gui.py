@@ -29,7 +29,7 @@ OVERFLOW_ITEMS = [("换行", "wrap"), ("省略号", "ellipsis")]
 SPACE_WRAP_ITEMS = [("关", "0"), ("2", "2"), ("3", "3"), ("4", "4"),
                     ("5", "5"), ("6", "6"), ("8", "8"), ("10", "10")]
 STROKE_CHOICES = [0, 1, 2, 3, 4, 6]
-LINE_ITEMS = (("title", "歌名"), ("artist", "歌手"), ("album", "专辑"))
+LINE_ITEMS = (("title", "歌名"), ("artist", "歌手"), ("album", "专辑"), ("info", "歌曲信息"))
 FONTS_FALLBACK = [
     ("微软雅黑（默认）", "msyhbd.ttc"), ("微软雅黑 常规", "msyh.ttc"), ("微软雅黑 Light", "msyhl.ttc"),
     ("黑体", "simhei.ttf"), ("宋体", "simsun.ttc"), ("楷体", "simkai.ttf"),
@@ -111,8 +111,8 @@ class SettingsWindow:
         nb = ttk.Notebook(self.win)
         nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         self._pages, self._rows = {}, {}
-        # 歌名/歌手/专辑各自一页：单页行数太多会把窗口撑得太长
-        for name in ("壁纸", "歌名", "歌手", "专辑", "排版", "面板", "系统"):
+        # 歌名/歌手/专辑/歌曲信息各自一页：单页行数太多会把窗口撑得太长
+        for name in ("壁纸", "歌名", "歌手", "专辑", "歌曲信息", "排版", "面板", "系统"):
             f = ttk.Frame(nb, padding=10)
             nb.add(f, text=name)
             self._pages[name] = f
@@ -180,11 +180,12 @@ class SettingsWindow:
         self.cover_dy_var = combo(pg, "封面 Y 偏移(像素)", OFFSET_CHOICES,
                                   int(cfg.get("cover_offset_y", 0) or 0))
 
-        # ---------------- 歌名/歌手/专辑（各自一页，标签不再重复行名） ----------------
+        # ---------------- 歌名/歌手/专辑/歌曲信息（各自一页，标签不再重复行名） ----------------
         self._line_vars = {}
         for key, zh in LINE_ITEMS:
             pg = self._pages[zh]
             v = {}
+            v["show"] = check(pg, "显示这一行", cfg.get(f"{key}_show", True))
             v["size"] = combo(pg, "字号(像素)", SIZE_CHOICES,
                               px_of(f"{key}_size_ratio", 0.075 if key == "title" else 0.042))
             v["font"] = combo(pg, "字体",
@@ -203,6 +204,11 @@ class SettingsWindow:
                                   int(cfg.get(f"{key}_stroke_w", 0) or 0))
             v["stroke_color"] = self._color_row(add, pg, "描边色", f"{key}_stroke_color", "#000000")
             self._line_vars[key] = v
+        # 歌曲信息模板（tk.Entry，可自由编辑；token 见 config 注释）
+        self._info_tpl_var = tk.StringVar(value=str(cfg.get(
+            "info_template", "{format} {samplerate} {bitrate} {bits}")))
+        add(self._pages["歌曲信息"], "信息模板",
+            ttk.Entry(self._pages["歌曲信息"], textvariable=self._info_tpl_var, width=34))
 
         # ---------------- 排版 ----------------
         pg = self._pages["排版"]
@@ -303,11 +309,14 @@ class SettingsWindow:
             self.cfg[f"{key}_color"] = v["color"].get()
             self.cfg[f"{key}_bold"] = v["bold"].get()
             self.cfg[f"{key}_shadow"] = v["shadow"].get()
+            self.cfg[f"{key}_show"] = v["show"].get()
             self.cfg[f"{key}_overflow"] = dict(OVERFLOW_ITEMS).get(v["of"].get(),
                                                                    "wrap" if key == "title" else "ellipsis")
             self.cfg[f"{key}_space_window"] = int(dict(SPACE_WRAP_ITEMS).get(v["space_w"].get(), "5"))
             self.cfg[f"{key}_bracket_break"] = v["bracket"].get()
             self.cfg[f"{key}_stroke_color"] = v["stroke_color"].get()
+        self.cfg["info_template"] = self._info_tpl_var.get().strip() \
+            or "{format} {samplerate} {bitrate} {bits}"
         self._int(self.tsg_var, "title_sub_gap_ratio", 0, 300, ratio=True)
         self._int(self.tlg_var, "title_line_gap_ratio", 0, 300, ratio=True)
         self._int(self.slg_var, "sub_line_gap_ratio", 0, 300, ratio=True)

@@ -250,8 +250,8 @@ gui_cfg = config.load()
 from aimp_wallpaper.settings_gui import SettingsWindow  # noqa: E402
 win = SettingsWindow(root, gui_cfg)
 n_labels = len(win._line_vars)
-check("gui line groups", n_labels == 3, f"groups={list(win._line_vars)}")
-check("gui 7 tabs", set(win._pages) == {"壁纸", "歌名", "歌手", "专辑", "排版", "面板", "系统"},
+check("gui line groups", n_labels == 4, f"groups={list(win._line_vars)}")
+check("gui 8 tabs", set(win._pages) == {"壁纸", "歌名", "歌手", "专辑", "歌曲信息", "排版", "面板", "系统"},
       str(sorted(win._pages)))
 win._line_vars["title"]["stroke_w"].set("3")
 win._line_vars["title"]["shadow"].set(False)
@@ -456,6 +456,77 @@ try:
 except Exception as e:  # 离屏环境可能拿不到 ULW，失败不掩盖其余结论
     check("lyrics window smoke", False, repr(e)[:120])
 root3.destroy()
+
+print()
+
+# ---------- I. 歌曲信息行 + 逐行显示开关 ----------
+from aimp_wallpaper.wallpaper import _audio_info, _format_info  # noqa: E402
+
+# 合成 FLAC：48000 Hz / 24 bit / 时长 60s / 大小→1796 kbps
+flac_size = 1796 * 1000 * 60 // 8  # bytes，使 size*8/60000 ≈ 1796 kbps
+si = bytearray(34)
+si[10], si[11] = 0x0B, 0xB8        # 48000（20bit 前 16 位）
+si[12] = 0x03                       # sr 低 4 位=0、channels=2(001)、bps bit4=1
+si[13] = 0x70                       # bps 低 4 位=7 → bps=23+1=24
+flac = b"fLaC" + bytes([0x80, 0, 0, 34]) + bytes(si) + b"\0" * 8
+flac_path = os.path.join(lrc_dir, "song.flac")
+with open(flac_path, "wb") as f:
+    f.write(flac)
+    f.truncate(flac_size)
+info = _audio_info(flac_path, 60000)
+check("flac format", info["format"] == "FLAC", info["format"])
+check("flac samplerate", info["samplerate"] == "48 kHz", info["samplerate"])
+check("flac bits", info["bits"] == "24 bit", info["bits"])
+check("flac bitrate", info["bitrate"] == "1796 kbps", info["bitrate"])
+
+meta_i = {"title": "t", "artist": "a", "album": "al", "filename": flac_path, "duration_ms": 60000}
+cfg_i = dict(config.DEFAULTS)
+cfg_i.update(bg_style="blur", blur_radius=60, darken=0.75, show_text=True, theme_night_follow=False)
+info_line = _format_info(cfg_i, meta_i)
+check("info template render", info_line == "FLAC 48 kHz 1796 kbps 24 bit", ascii(info_line))
+# 未知文件 → 全 — → 整行隐藏
+meta_u = {"title": "t", "artist": "a", "album": "al", "filename": "http://stream/x", "duration_ms": 0}
+check("info unknown hidden", _format_info(cfg_i, meta_u) == "")
+# 自定义模板 + {duration}
+cfg_i2 = {**cfg_i, "info_template": "{format} {duration}"}
+check("info custom template", _format_info(cfg_i2, meta_i) == "FLAC 1:00", ascii(_format_info(cfg_i2, meta_i)))
+
+# 渲染：info 行出现 / 逐行显示开关全关 → 与无文字版一致
+img_info = wallpaper.render_poster(cover, meta_i, W, H, cfg_i)
+img_noinfo = wallpaper.render_poster(cover, meta_i, W, H, {**cfg_i, "info_show": False})
+check("info line drawn", np.abs(arr(img_info) - arr(img_noinfo)).sum() > 3000)
+cfg_alloff = {**cfg_i, "title_show": False, "artist_show": False, "album_show": False, "info_show": False}
+img_off = wallpaper.render_poster(cover, meta_i, W, H, cfg_alloff)
+img_notext = wallpaper.render_poster(cover, meta_i, W, H, {**cfg_i, "show_text": False})
+check("all lines off = no text", np.abs(arr(img_off) - arr(img_notext)).sum() == 0)
+img_tonly = wallpaper.render_poster(cover, meta_i, W, H, {**cfg_i, "artist_show": False,
+                                                          "album_show": False, "info_show": False})
+check("title only differs", 0 < np.abs(arr(img_tonly) - arr(img_off)).sum() < np.inf)
+
+# 迁移播种：旧配置无 info_* → 从 album_* 播种
+seed2 = os.path.join(tmp, "seed2", "config.json")
+os.makedirs(os.path.dirname(seed2), exist_ok=True)
+with open(seed2, "w", encoding="utf-8") as f:
+    json.dump({"album_color": "#00FFAA", "album_size_ratio": 0.05, "album_shadow": False}, f)
+config.CONFIG_PATH = seed2
+cfg3 = config.load()
+check("info style seeded", cfg3["info_color"] == "#00FFAA" and cfg3["info_size_ratio"] == 0.05
+      and cfg3["info_shadow"] is False, f"{cfg3['info_color']}/{cfg3['info_size_ratio']}")
+config.CONFIG_PATH = _saved_path
+
+# GUI：歌曲信息页存在 + 模板保存（E 的窗口已随 root 销毁，这里新建独立实例）
+root4 = tk.Tk()
+root4.withdraw()
+sg.set_autostart = lambda enabled: True
+sg.autostart_enabled = lambda: True
+win_i = SettingsWindow(root4, config.load())
+check("gui info page", "歌曲信息" in win_i._pages)
+win_i._info_tpl_var.set("{format} {bits}")
+win_i._save()
+with open(config.CONFIG_PATH, encoding="utf-8") as f:
+    saved2 = json.load(f)
+check("gui save template", saved2.get("info_template") == "{format} {bits}", saved2.get("info_template"))
+root4.destroy()
 
 print()
 print("RESULT:", "ALL_PASS" if not FAILS else f"FAILED={FAILS}")
