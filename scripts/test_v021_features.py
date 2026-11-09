@@ -98,6 +98,17 @@ wg2 = wallpaper._text_len(draw, "aa (bb", font)
 lg = wallpaper._wrap_title(draw, text_g, font, (wg1 + wg2) / 2, 2, space_window=2, bracket_break=True)
 print("bracket group move:", ascii(lg))
 check("bracket group to next line", lg[0] == "aa" and lg[1].startswith("("), ascii(lg))
+# 换行模式无省略号：3 行文本 → 3 行全展示，任何一行都不含 …
+text3 = "aaaa bb cc dd ee ff gg"
+w3a = wallpaper._text_len(draw, "aaaa bb", font)
+w3b = wallpaper._text_len(draw, "aaaa bb cc", font)
+l3 = wallpaper._wrap_title(draw, text3, font, (w3a + w3b) / 2, 4)
+print("3-line wrap:", ascii(l3))
+check("wrap 3 lines no ellipsis", len(l3) == 3 and not any("…" in ln for ln in l3), ascii(l3))
+# 超过行数上限 → 恰好 max_lines 行、无 … 标记
+lc = wallpaper._wrap_title(draw, "aaaa bb cc dd ee ff gg hh ii jj kk ll mm nn oo", font,
+                           (w3a + w3b) / 2, 2)
+check("wrap cap no ellipsis", len(lc) == 2 and not any("…" in ln for ln in lc), ascii(lc))
 
 # ---------- C. 渲染：四种背景方案 + 夜间遮罩 ----------
 rng = np.random.default_rng(7)

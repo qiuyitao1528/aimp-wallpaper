@@ -4,7 +4,7 @@
 ; 注意：config.json / portable.flag 不打进安装包（用户状态与便携标记由运行时生成）
 
 #define MyAppName "AIMP Wallpaper"
-#define MyAppVersion "0.2.6"
+#define MyAppVersion "0.2.7"
 #define MyAppExeName "aimp-wallpaper.exe"
 #define MyAppMutex "AIMP_Wallpaper_Single"
 

@@ -69,9 +69,9 @@ DEFAULTS = {
     "artist_color": "#FFFFFF",      # 歌手颜色
     "album_color": "#FFFFFF",       # 专辑颜色
     "sub_color": "#FFFFFF",         # （旧版）副行颜色，迁移源
-    "title_overflow": "wrap",       # 歌名过长：wrap=折行 / ellipsis=省略号
-    "artist_overflow": "ellipsis",  # 歌手过长
-    "album_overflow": "ellipsis",   # 专辑过长
+    "title_overflow": "wrap",       # 歌名过长：wrap=折行（最多 4 行，无省略号）/ ellipsis=单行省略号
+    "artist_overflow": "ellipsis",  # 歌手过长（同上）
+    "album_overflow": "ellipsis",   # 专辑过长（同上）
     "sub_overflow": "ellipsis",     # （旧版）副行过长，迁移源
     "wrap_space_window": 5,     # （旧版）全局空格断行，迁移源
     "title_space_window": 5,    # 歌名空格断行窗口（折行点剩余部分前 N 字符内有空格则断在空格后，0=关）

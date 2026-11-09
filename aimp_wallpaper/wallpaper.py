@@ -478,8 +478,9 @@ def _scan_open(seg: str, pos0: int, cur_open: int) -> int:
     return cur_open
 
 
-def _wrap_title(draw, text, font, max_w, max_lines=2, space_window=0, bracket_break=False):
-    """超宽处理：max_lines>1 按像素宽度折行（末行放不下收省略号）；==1 直接省略号截断。
+def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, bracket_break=False):
+    """超宽处理：按像素宽度折行，最多 max_lines 行（默认 4），超限直接截断、无省略号——
+    换行模式就是要看到全文，省略号由 overflow=ellipsis 单行模式负责。
 
     space_window>0：折行点的剩余部分前 space_window 个字符内有空格时，
     断点移到该空格后（首行允许轻微超宽，避免把短词组切碎）。
@@ -493,7 +494,7 @@ def _wrap_title(draw, text, font, max_w, max_lines=2, space_window=0, bracket_br
         return [text]
     lines, cur = [], ""
     i, n = 0, len(text)
-    line_start = 0   # 当前正在累积的这一行在原文里的起点（末行收省略号要用）
+    line_start = 0   # 当前正在累积的这一行在原文里的起点
     open_pos = -1    # 本行未闭合的开括号位置（-1=不在括号内）
     while i < n:
         ch = text[i]
@@ -523,8 +524,7 @@ def _wrap_title(draw, text, font, max_w, max_lines=2, space_window=0, bracket_br
             lines.append(cur.rstrip())
             cur = ""
             open_pos = -1
-            if len(lines) == max_lines:  # 装不下：末行=剩余全部文本收省略号
-                lines[-1] = _ellipsis(draw, text[line_start:].rstrip(), font, max_w)
+            if len(lines) == max_lines:  # 达到行数上限：直接截断（换行模式无省略号）
                 break
             while i < n and text[i] == " ":  # 断行后跳过前导空格（居中/右对齐会偏移）
                 i += 1
@@ -659,9 +659,9 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                 if sw == 0 and bold and not real_bold:
                     sw = 1
                 overflow = cfg.get(f"{g}_overflow", "wrap" if g == "title" else "ellipsis")
-                if overflow == "wrap":  # 折行每条最多 2 行，末行省略号
+                if overflow == "wrap":  # 折行最多 4 行，无省略号（超限截断）
                     lines = _wrap_title(
-                        draw, text, font, tw_max, 2,
+                        draw, text, font, tw_max, 4,
                         max(0, min(20, int(cfg.get(f"{g}_space_window", 0) or 0))),
                         bool(cfg.get(f"{g}_bracket_break", True)))
                 else:
