@@ -65,8 +65,8 @@ def parse_lrc(text: str) -> list[tuple[int, str]]:
     return out
 
 
-def _search_netease(title: str, artist: str, duration_ms: int | None) -> str | None:
-    """网易云搜索 → 选时长最接近的歌曲 → 返回 LRC 文本。"""
+def _search_netease(title: str, artist: str, duration_ms: int | None) -> tuple[str | None, str | None]:
+    """网易云搜索 → 选时长最接近的歌曲 → 返回 (原文 LRC, 翻译 LRC)。"""
     kws = []
     t = _BRACKETS.sub("", title).strip()
     a = _BRACKETS.sub("", artist).strip()
@@ -90,10 +90,10 @@ def _search_netease(title: str, artist: str, duration_ms: int | None) -> str | N
             ly = _http_json(NETEASE_LYRIC.format(sid=best["id"]))
             lrc = (ly.get("lrc") or {}).get("lyric") or ""
             if lrc.strip():
-                return lrc
+                return lrc, (ly.get("tlyric") or {}).get("lyric") or None
         except Exception:
             continue
-    return None
+    return None, None
 
 
 def _local_lrc_candidates(audio_path: str, title: str) -> list[str]:
@@ -105,9 +105,30 @@ def _local_lrc_candidates(audio_path: str, title: str) -> list[str]:
     return cands
 
 
+def _pair_lyrics(orig: list[tuple[int, str]], trans_lines: list[tuple[int, str]] | None = None):
+    """合并原文/翻译 → [(ms, 原文, 翻译)]。
+
+    网易云：tlyric 按时间戳精确配对；本地双语 LRC：同时间戳连续双行，第二行视为翻译。
+    """
+    tmap: dict[int, str] = {}
+    for ms, t in (trans_lines or []):
+        tmap.setdefault(ms, t)
+    out: list[tuple[int, str, str]] = []
+    i = 0
+    while i < len(orig):
+        ms, text = orig[i]
+        tr = tmap.get(ms, "")
+        if not tr and i + 1 < len(orig) and orig[i + 1][0] == ms:
+            tr = orig[i + 1][1]
+            i += 1
+        out.append((ms, text, tr))
+        i += 1
+    return out
+
+
 def fetch_lrc(title: str, artist: str, duration_ms: int | None,
-              cache_dir: str, audio_path: str | None = None) -> list[tuple[int, str]] | None:
-    """缓存 → 本地 .lrc → 网易云。返回解析后的行，失败 None。"""
+              cache_dir: str, audio_path: str | None = None):
+    """缓存 → 本地 .lrc → 网易云。返回 [(ms, 原文, 翻译)]（翻译可为空串），失败 None。"""
     os.makedirs(cache_dir, exist_ok=True)
     key = hashlib.md5(f"{title.lower()}|{artist.lower()}".encode("utf-8")).hexdigest()
     cache_file = os.path.join(cache_dir, key + ".lrc")
@@ -129,22 +150,23 @@ def fetch_lrc(title: str, artist: str, duration_ms: int | None,
                         continue
                 if lrc_text:
                     break
+    tlyric_text = None
     if lrc_text is None:
-        lrc_text = _search_netease(title, artist, duration_ms)
-        if lrc_text:
-            try:
-                with open(cache_file, "w", encoding="utf-8") as f:
-                    f.write(lrc_text)
-            except OSError:
-                pass
+        lrc_text, tlyric_text = _search_netease(title, artist, duration_ms)
     if not lrc_text:
         return None
     lines = parse_lrc(lrc_text)
+    if lines and tlyric_text:
+        lines = _pair_lyrics(lines, parse_lrc(tlyric_text))
+    elif lines:
+        lines = _pair_lyrics(lines)
     if lines:
-        try:  # 回写规范化结果，命中缓存路径也统一格式
+        try:  # 回写规范化结果（翻译行与原文同时间戳），缓存命中路径也保留对照
             with open(cache_file, "w", encoding="utf-8") as f:
-                f.write("\n".join(f"[{ms // 60000:02d}:{ms % 60000 // 1000:02d}.{ms % 1000:03d}]{t}"
-                                  for ms, t in lines))
+                f.write("\n".join(
+                    f"[{ms // 60000:02d}:{ms % 60000 // 1000:02d}.{ms % 1000:03d}]{t}"
+                    + (f"\n[{ms // 60000:02d}:{ms % 60000 // 1000:02d}.{ms % 1000:03d}]{tr}" if tr else "")
+                    for ms, t, tr in lines))
         except OSError:
             pass
     return lines or None
@@ -190,13 +212,13 @@ class LyricsWindow:
         self.get_panel_pos = get_panel_pos  # () -> (x, y) | None（面板不可见时 None）
         self.s = (desktop.user32.GetDpiForSystem() or 96) / 96.0
         self.W = int(cfg.get("vis_width", 420) * self.s)
-        # 字号按屏幕高比例（与其他文字键同口径），窗口高度随字号自适应
+        # 字号按屏幕高比例（与其他文字键同口径），窗口高度按三行（原文/译文/下一行）自适应
         self._px_cur = max(12, int(root.winfo_screenheight()
                                    * float(cfg.get("lyrics_size_ratio", 0.032) or 0.032)))
-        self._px_next = max(10, int(self._px_cur * 0.75))
-        self.H = int((self._px_cur + self._px_next) * 1.8)
-        self._y_cur = int(self.H * 0.30)
-        self._y_next = int(self.H * 0.72)
+        self._px_trans = max(10, int(self._px_cur * 0.62))
+        self._px_next = max(10, int(self._px_cur * 0.72))
+        self._gap = max(3, self._px_cur // 8)
+        self.H = self._px_cur + self._px_trans + self._px_next + self._gap * 2 + self._px_cur // 2
         self.lines: list[tuple[int, str]] = []
         self._times: list[int] = []  # 歌词未就绪时 _tick 也要能跑（set_lines 前不存在会炸链）
         self._line_idx = -1
@@ -225,6 +247,8 @@ class LyricsWindow:
         self._draw = ImageDraw.Draw(self._img)
         self._font_key = None
         self._ensure_fonts()
+        self._font_trans = wallpaper._load_font(False, self._px_trans,
+                                                cfg.get("lyrics_font_file"))[0]
         self._font_next = wallpaper._load_font(False, self._px_next,
                                                cfg.get("lyrics_font_file"))[0]
 
@@ -269,10 +293,10 @@ class LyricsWindow:
             return
         pos = self._target_pos()
         if pos != self._last_follow:
-            cur = self._screen_pos()
-            if pos != cur:
-                self.win.geometry(f"+{pos[0]}+{pos[1]}")
             self._last_follow = pos
+            if pos != self._screen_pos():
+                self.win.geometry(f"+{pos[0]}+{pos[1]}")
+                self.surface.update(self._img, pos=pos)  # 内容随窗口一起走
 
     # ---------- 显隐/锁定 ----------
 
@@ -297,19 +321,24 @@ class LyricsWindow:
     def _drag_start(self, e):
         if self.cfg.get("lyrics_locked"):
             return
-        self._drag = (e.x, e.y, *self._screen_pos())
+        sx, sy = self._screen_pos()
+        self._drag = (e.x_root, e.y_root, sx, sy)
 
     def _drag_move(self, e):
         if not self._drag:
             return
-        dx, dy, ox, oy = self._drag
-        nx, ny = ox + e.x - dx, oy + e.y - dy
+        dxr, dyr, ox, oy = self._drag
+        nx, ny = ox + e.x_root - dxr, oy + e.y_root - dyr
         self.cfg["lyrics_pos"] = [nx, ny]
         self.win.geometry(f"+{nx}+{ny}")
+        # ULW 内容不跟 HWND 移动：拖动时必须立即原子重呈，否则内容滞留旧位置（消失一半）
+        self.surface.update(self._img, pos=(nx, ny))
 
     def _drag_end(self, e):
         if self._drag:
+            self.cfg["lyrics_pos"] = self._screen_pos()
             config.save(self.cfg)
+            self.surface.update(self._img, pos=self._screen_pos())
         self._drag = None
 
     def _popup(self, e):
@@ -324,8 +353,9 @@ class LyricsWindow:
     # ---------- 帧循环（2Hz 文本 + 位置跟随） ----------
 
     def set_lines(self, lines):
-        self.lines = lines or []
-        self._times = [ms for ms, _ in self.lines]
+        # 兼容 (ms, 原文) 与 (ms, 原文, 翻译) 两种来源
+        self.lines = [tuple(e) + ("",) * (3 - len(tuple(e))) for e in (lines or [])]
+        self._times = [e[0] for e in self.lines]
         self._line_idx = -1
 
     def _current_index(self, pos_ms: int) -> int:
@@ -361,14 +391,15 @@ class LyricsWindow:
                 if idx != self._line_idx:
                     self._line_idx = idx
                     cur = self.lines[idx][1] if 0 <= idx < len(self.lines) else ""
+                    cur_tr = self.lines[idx][2] if 0 <= idx < len(self.lines) else ""
                     nxt = self.lines[idx + 1][1] if 0 <= idx + 1 < len(self.lines) else ""
-                    self._render(cur, nxt)
+                    self._render(cur, cur_tr, nxt)
         except Exception:  # 任何异常都不能断掉 after 链（断了歌词窗就永久冻结）
             applog.log_exc("歌词 tick 异常:\n", *sys.exc_info())
         self.win.after(400, self._tick)
 
-    def _render(self, cur: str, nxt: str):
-        pair = (cur, nxt)
+    def _render(self, cur: str, cur_tr: str, nxt: str):
+        pair = (cur, cur_tr, nxt)
         if self._shown_pair == pair:
             return  # 内容未变不重绘
         d = self._draw
@@ -379,17 +410,22 @@ class LyricsWindow:
         srgb = wallpaper._hex_rgb(cfg.get("lyrics_stroke_color"), (0, 0, 0))
         sw = max(0, min(6, int(cfg.get("lyrics_stroke_w", 2) or 0)))
         shadow_on = bool(cfg.get("lyrics_shadow", True))
-        if cur:  # 样式与壁纸歌名行同源：逐字符回退 + 阴影/描边同款管线
-            wallpaper._draw_shadow_text(
-                self._img, (self.W / 2, self._y_cur), cur, self._font_cur,
-                fill=(*cur_rgb, 255), anchor="mm", shadow_alpha=170,
-                stroke_width=sw, stroke_fill=(*srgb, 200) if sw else None,
-                shadow=shadow_on)
+        # 视觉行按需堆叠：原文 / 译文（有对照时）/ 下一行原文；整体在窗内垂直居中
+        rows = []
+        if cur:
+            rows.append((self._font_cur, cur, (*cur_rgb, 255), sw))
+        if cur_tr:
+            rows.append((self._font_trans, cur_tr, (*nxt_rgb, 205), max(0, sw - 1)))
         if nxt:
+            rows.append((self._font_next, nxt, (*nxt_rgb, 190), max(0, sw - 1)))
+        total = sum(f.size for f, *_r in rows) + self._gap * (len(rows) - 1)
+        y = (self.H - total) // 2
+        for f, t, fill, s in rows:  # 样式与壁纸文字同源：逐字符回退 + 阴影/描边同款管线
             wallpaper._draw_shadow_text(
-                self._img, (self.W / 2, self._y_next), nxt, self._font_next,
-                fill=(*nxt_rgb, 190), anchor="mm", shadow_alpha=150,
-                stroke_width=max(0, sw - 1), stroke_fill=(*srgb, 150) if sw > 1 else None,
+                self._img, (self.W / 2, y + f.size / 2), t, f,
+                fill=fill, anchor="mm", shadow_alpha=170,
+                stroke_width=s, stroke_fill=(*srgb, 200) if s else None,
                 shadow=shadow_on)
+            y += f.size + self._gap
         self._shown_pair = pair
         self.surface.update(self._img, pos=self._screen_pos())

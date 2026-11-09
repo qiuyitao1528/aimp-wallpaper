@@ -397,7 +397,17 @@ with open(os.path.join(song_dir, "testsong.lrc"), "w", encoding="utf-8") as f:
     f.write("[00:01.00]hello\n")
 got = fetch_lrc("testsong", "someone", None, os.path.join(lrc_dir, "cache"),
                 os.path.join(song_dir, "testsong.mp3"))
-check("lrc local fetch", bool(got) and got[0][1] == "hello", str(got))
+check("lrc local fetch", bool(got) and got[0] == (1000, "hello", ""), str(got))
+# 双语 LRC：同时间戳双行 → 配对成 (ms, 原文, 翻译)
+with open(os.path.join(song_dir, "bilingual.lrc"), "w", encoding="utf-8") as f:
+    f.write("[00:01.00]Hello\n[00:01.00]你好\n[00:04.00]World\n")
+got2 = fetch_lrc("bilingual", "someone", None, os.path.join(lrc_dir, "cache2"),
+                 os.path.join(song_dir, "bilingual.mp3"))
+check("lrc bilingual pair", got2 == [(1000, "Hello", "你好"), (4000, "World", "")], str(got2))
+# 缓存回读：双语对照在缓存往返后不丢
+got3 = fetch_lrc("bilingual", "someone", None, os.path.join(lrc_dir, "cache2"),
+                 os.path.join(song_dir, "bilingual.mp3"))
+check("lrc bilingual cache roundtrip", got3 == got2, str(got3))
 
 # 歌词样式播种：旧配置无 lyrics_* 键 → 从 title_* 播种
 seed_path = os.path.join(tmp, "seed", "config.json")
@@ -449,8 +459,9 @@ try:
     lw = LyricsWindow(root3, FakeIpc(), config.load(), lambda: None)
     lw.win.withdraw()
     lw.set_lines([(0, "第一句"), (1500, "第二句")])
-    lw._render("第一句", "第二句")
-    check("lyrics window smoke", lw.H > 20 and lw._shown_pair == ("第一句", "第二句"),
+    lw.set_lines([(0, "第一句", ""), (1500, "第二句", "译"), (3000, "第三句", "")])
+    lw._render("第二句", "译", "第三句")
+    check("lyrics window smoke", lw.H > 20 and lw._shown_pair == ("第二句", "译", "第三句"),
           f"H={lw.H} pair={ascii(lw._shown_pair)}")
     lw.win.destroy()
 except Exception as e:  # 离屏环境可能拿不到 ULW，失败不掩盖其余结论
