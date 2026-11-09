@@ -269,9 +269,51 @@ def _night_alpha(cfg: dict) -> int:
     return pct * 255 // 100
 
 
-def _blur_bg(cover: Image.Image | None, w: int, h: int, cfg: dict) -> Image.Image:
-    """背景方案分发：blur=高斯模糊 / blur_vignette=模糊+暗角 / sharp=原图铺满 / gradient=主色渐变。
+def _apply_blur_type(base: Image.Image, cfg: dict) -> Image.Image:
+    """模糊类型分发（blur/blur_vignette 方案下生效，都在 1/4 小图上算）：
 
+    gauss=高斯（默认）/ box=方框（硬边复古感）/ motion=水平运动拖影 /
+    zoom=缩放放射（zoom-burst）/ pixel=像素化（马赛克）。
+    """
+    r = max(4, int(cfg.get("blur_radius", 28) or 28))
+    t = cfg.get("blur_type", "gauss")
+    if t == "box":
+        return base.filter(ImageFilter.BoxBlur(max(2, r // 5)))
+    if t == "motion":
+        # 水平方向 k 点盒式均值（=运动拖影）。PIL 的 Kernel 只支持 3x3/5x5，
+        # 长条卷积用 numpy 滑窗 cumsum 实现（向量化，O(像素)）
+        k = min(31, max(5, (r // 4) | 1))
+        sw, sh = base.size
+        a = np.asarray(base, dtype=np.float64)
+        half = k // 2
+        p = np.pad(a, ((0, 0), (half, half), (0, 0)), mode="edge")
+        cc = np.cumsum(p, axis=1)
+        cc = np.concatenate([np.zeros((cc.shape[0], 1, 3)), cc], axis=1)
+        streak = (cc[:, k:k + sw] - cc[:, :sw]) / k
+        return Image.fromarray(streak.astype(np.uint8))
+    if t == "zoom":
+        sw, sh = base.size
+        steps = 6
+        maxz = min(1.35, 1.0 + r / 150.0)  # 最大放大倍率随模糊半径增长
+        acc = np.asarray(base, dtype=np.float64)
+        for i in range(1, steps):
+            z = 1.0 + (maxz - 1.0) * i / (steps - 1)
+            cw, ch = max(2, int(sw / z)), max(2, int(sh / z))
+            x, y = (sw - cw) // 2, (sh - ch) // 2
+            acc += np.asarray(base.crop((x, y, x + cw, y + ch)).resize((sw, sh), Image.BILINEAR),
+                              dtype=np.float64)
+        return Image.fromarray((acc / steps).astype(np.uint8))
+    if t == "pixel":
+        sw, sh = base.size
+        k = max(3, r // 3)
+        return base.resize((max(2, sw // k), max(2, sh // k)), Image.BOX).resize((sw, sh), Image.NEAREST)
+    return base.filter(ImageFilter.GaussianBlur(radius=r / 4.0))
+
+
+def _blur_bg(cover: Image.Image | None, w: int, h: int, cfg: dict) -> Image.Image:
+    """背景方案分发：blur=模糊 / blur_vignette=模糊+暗角 / sharp=原图铺满 / gradient=主色渐变。
+
+    blur 类方案的模糊算法由 blur_type 决定（高斯/方框/运动/缩放/像素化）。
     跟随日夜主题时，深色主题再叠一层黑色遮罩（浓度=night_overlay%）。
     """
     style = cfg.get("bg_style", "blur")
@@ -297,12 +339,11 @@ def _blur_bg(cover: Image.Image | None, w: int, h: int, cfg: dict) -> Image.Imag
         scale = max(sw / im.width, sh / im.height)
         im = im.resize((max(sw, int(im.width * scale + 0.5)), max(sh, int(im.height * scale + 0.5))), Image.BOX)
         x, y = (im.width - sw) // 2, (im.height - sh) // 2
-        bg = im.crop((x, y, x + sw, y + sh))
-        bg = bg.filter(ImageFilter.GaussianBlur(radius=max(4, cfg["blur_radius"]) / 4.0))
+        bg = _apply_blur_type(im.crop((x, y, x + sw, y + sh)), cfg)
         # 亮度/饱和度是逐像素运算，在小图上做与大图等价（省 ~12ms）
         bg = ImageEnhance.Brightness(bg).enhance(cfg["darken"])
         bg = ImageEnhance.Color(bg).enhance(0.9)
-        bg = bg.resize((w, h), Image.BILINEAR)
+        bg = bg.resize((w, h), Image.NEAREST if cfg.get("blur_type", "gauss") == "pixel" else Image.BILINEAR)
         if style == "blur_vignette":
             bg = _vignette(bg, 120)
     alpha = _night_alpha(cfg)
@@ -656,8 +697,8 @@ _BG_CACHE: dict = {}
 
 def _get_bg(cover_bytes: bytes | None, w: int, h: int, cfg: dict) -> Image.Image:
     """缓存的模糊背景（RGBA 原件，调用方 copy 后使用）；同封面连播零重复模糊。"""
-    key = (w, h, cfg.get("bg_style"), cfg.get("blur_radius"), cfg.get("darken"),
-           _night_alpha(cfg), hash(cover_bytes or b""))
+    key = (w, h, cfg.get("bg_style"), cfg.get("blur_type"), cfg.get("blur_radius"),
+           cfg.get("darken"), _night_alpha(cfg), hash(cover_bytes or b""))
     bg = _BG_CACHE.get(key)
     if bg is None:
         bg = _blur_bg(_open_cover(cover_bytes), w, h, cfg).convert("RGBA")

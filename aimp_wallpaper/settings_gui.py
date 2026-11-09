@@ -19,6 +19,8 @@ ALIGN_ITEMS = [("左对齐", "left"), ("居中", "center"), ("右对齐", "right
 VALIGN_ITEMS = [("顶部", "top"), ("居中", "center"), ("底部", "bottom")]
 BG_CHOICES = [("高斯模糊", "blur"), ("模糊+暗角", "blur_vignette"),
               ("原图铺满", "sharp"), ("主色渐变", "gradient")]
+BLUR_TYPE_ITEMS = [("高斯", "gauss"), ("方框", "box"), ("运动", "motion"),
+                   ("缩放", "zoom"), ("像素化", "pixel")]
 NIGHT_ALPHA_CHOICES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]
 OVERFLOW_ITEMS = [("换行", "wrap"), ("省略号", "ellipsis")]
 SPACE_WRAP_ITEMS = [("关", "0"), ("2", "2"), ("3", "3"), ("4", "4"),
@@ -148,7 +150,8 @@ class SettingsWindow:
         # ---------------- 壁纸 ----------------
         pg = self._pages["壁纸"]
         self.bg_style_var = labeled(pg, "背景方案", BG_CHOICES, cfg.get("bg_style", "blur"))
-        self.blur_var = combo(pg, "背景模糊(像素)", BLUR_CHOICES, int(cfg.get("blur_radius", 28)))
+        self.blur_type_var = labeled(pg, "模糊类型", BLUR_TYPE_ITEMS, cfg.get("blur_type", "gauss"))
+        self.blur_var = combo(pg, "模糊强度(像素)", BLUR_CHOICES, int(cfg.get("blur_radius", 28)))
         self.night_var = check(pg, "跟随系统日/夜主题（夜间叠黑色遮罩）",
                                cfg.get("theme_night_follow", False))
         self.night_alpha_var = combo(pg, "夜间遮罩浓度(%)", NIGHT_ALPHA_CHOICES,
@@ -248,6 +251,7 @@ class SettingsWindow:
 
     def _save(self):
         self.cfg["bg_style"] = dict(BG_CHOICES).get(self.bg_style_var.get(), "blur")
+        self.cfg["blur_type"] = dict(BLUR_TYPE_ITEMS).get(self.blur_type_var.get(), "gauss")
         self._int(self.blur_var, "blur_radius", 4, 200)
         self.cfg["theme_night_follow"] = self.night_var.get()
         self._int(self.night_alpha_var, "night_overlay", 0, 95)

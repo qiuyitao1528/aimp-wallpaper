@@ -252,5 +252,34 @@ sg.set_autostart = None  # 还原（脚本即将退出，仅防误用）
 sg.autostart_enabled = None
 
 print()
+
+# ---------- G. 模糊类型：gauss/box/motion/zoom/pixel ----------
+blurs = {}
+for t in ("gauss", "box", "motion", "zoom", "pixel"):
+    c = dict(config.DEFAULTS)
+    c.update(bg_style="blur", blur_type=t, blur_radius=60, darken=0.75, theme_night_follow=False)
+    b = wallpaper._blur_bg(cover_img, W, H, c)
+    ab = arr(b)
+    blurs[t] = ab
+    check(f"blur_type {t} ok", b.size == (W, H), f"mean={ab.mean():.1f}")
+for t in ("box", "motion", "zoom", "pixel"):
+    d = float(np.abs(blurs[t] - blurs["gauss"]).mean())
+    check(f"blur_type {t} differs from gauss", d > 0.2, f"meandiff={d:.2f}")
+# 像素化应有块状结构（块内几乎零差异）
+px = blurs["pixel"]
+inner = px[100:164, 100:164]
+check("pixel blocky", float(np.abs(np.diff(inner, axis=0)).mean()) < 1.0,
+      f"inner hf={float(np.abs(np.diff(inner, axis=0)).mean()):.3f}")
+# 缓存键区分类型
+k1 = wallpaper._get_bg.__doc__  # noqa: F841 仅为命名空间提示
+wallpaper._BG_CACHE.clear()
+c1 = dict(config.DEFAULTS); c1.update(bg_style="blur", blur_type="gauss", blur_radius=60,
+                                      darken=0.75, theme_night_follow=False)
+c2 = {**c1, "blur_type": "box"}
+wallpaper._get_bg(cover, W, H, c1)
+wallpaper._get_bg(cover, W, H, c2)
+check("bg cache keyed by type", len(wallpaper._BG_CACHE) == 2, f"cached={len(wallpaper._BG_CACHE)}")
+
+print()
 print("RESULT:", "ALL_PASS" if not FAILS else f"FAILED={FAILS}")
 sys.exit(1 if FAILS else 0)
