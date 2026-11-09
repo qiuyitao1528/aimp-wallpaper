@@ -137,7 +137,7 @@ def parse_fileinfo(data: bytes) -> dict | None:
 class AimpIPC(threading.Thread):
     """后台线程：持有 AIMP 连接、收封面/通知、周期轮询；对外提供快照与控制命令。"""
 
-    def __init__(self, poll_ms=1000):
+    def __init__(self, poll_ms=120):
         super().__init__(daemon=True, name="aimp-ipc")
         self._poll_ms = poll_ms
         self._lock = threading.Lock()
@@ -230,8 +230,8 @@ class AimpIPC(threading.Thread):
             self._cover_evt.clear()
         now = time.time()
         self._cover_retry_until = now + 10.0
-        self._cover_next_try = now + 0.3
-        self._cover_fast_until = now + 2.0
+        self._cover_next_try = now + 0.05
+        self._cover_fast_until = now + 0.8
 
     def _try_cover_once(self):
         if not self._aimp or not self._cover_retry_until:
@@ -239,7 +239,7 @@ class AimpIPC(threading.Thread):
         now = time.time()
         if now < self._cover_next_try:
             return
-        self._cover_next_try = now + (0.5 if now < getattr(self, "_cover_fast_until", 0) else 1.0)
+        self._cover_next_try = now + (0.06 if now < getattr(self, "_cover_fast_until", 0) else 0.5)
         # r==0 可能只是切歌瞬间还没解析好，不立即放弃，按窗口继续重试
         user32.SendMessageW(self._aimp, WM_AIMP_COMMAND, CMD_GET_ALBUMART, LPARAM(self._recv or 0))
 
@@ -257,7 +257,7 @@ class AimpIPC(threading.Thread):
             if sig != self._cand_sig:
                 self._cand_sig, self._cand_since = sig, time.time()
                 return
-            if time.time() - self._cand_since < 0.5:
+            if time.time() - self._cand_since < 0.2:
                 return
         self._cand_sig = None
         if sig == self._committed_sig:

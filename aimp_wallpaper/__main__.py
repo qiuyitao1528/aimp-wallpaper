@@ -9,6 +9,7 @@ import ctypes
 import os
 import sys
 import threading
+import time
 import tkinter as tk
 from ctypes import wintypes
 
@@ -85,10 +86,35 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
         snap = ipc.snapshot()
         if not snap["title"] and not snap["filename"]:
             continue  # 元数据还没就绪，等下一轮
+        meta_now = {k: snap[k] for k in ("title", "artist", "album")}
+
+        # 同专辑连播：封面几乎必与上一首相同，先用上一张立即换壁纸，不等 AIMP 回图
+        same_album = (last_cover is not None and last_meta is not None and meta_now["album"]
+                      and meta_now["album"] == last_meta.get("album")
+                      and meta_now["artist"] == last_meta.get("artist"))
+        if same_album:
+            t0 = time.monotonic()
+            if render(last_cover, meta_now, "同专辑"):
+                ms = (time.monotonic() - t0) * 1000
+                applog.log(f"[切歌] 同专辑快速路径 耗时 {ms:.0f}ms（不等封面）")
+                last_gen, last_meta = gen, meta_now
+                real = ipc.wait_cover(gen, timeout=6.0)  # 后台确认封面是否真的相同
+                if real and real != last_cover:
+                    applog.log("[切歌] 实际封面与上一首不同，补渲染")
+                    render(real, meta_now, "封面更新")
+                    last_cover = real
+                continue
+
+        t_wait0 = time.monotonic()
         cover = ipc.wait_cover(gen, timeout=12.0)  # 覆盖 10s 封面重试窗口
+        cover_ms = (time.monotonic() - t_wait0) * 1000
+        t_render0 = time.monotonic()
         if render(cover, snap, "切歌"):
+            render_ms = (time.monotonic() - t_render0) * 1000
+            applog.log(f"[切歌] 耗时: 封面 {cover_ms:.0f}ms + 渲染换图 {render_ms:.0f}ms "
+                       f"= {cover_ms + render_ms:.0f}ms")
             last_gen = gen
-            last_cover, last_meta = cover, {k: snap[k] for k in ("title", "artist", "album")}
+            last_cover, last_meta = cover, meta_now
 
 
 def _acquire_single_instance_mutex() -> bool:
@@ -118,6 +144,9 @@ def main():
 
     applog.log("启动")
     sys.excepthook = lambda t, v, tb: applog.log_exc("未捕获异常:\n", t, v, tb)
+    # 线程内的异常默认只打印到不可见的 stderr（--windowed 下等于消失），这里统一落盘
+    threading.excepthook = lambda a: applog.log_exc(
+        f"线程 {getattr(a.thread, 'name', '?')} 异常:\n", a.exc_type, a.exc_value, a.exc_traceback)
     import gc
     gc.set_threshold(50_000, 100, 100)  # 动画循环：降低 GC 频率防微卡顿
     # 频谱动画时序：1ms 系统定时器分辨率 + 进程优先级提档，压 after 回调的调度迟到

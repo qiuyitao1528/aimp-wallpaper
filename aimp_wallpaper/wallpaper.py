@@ -57,6 +57,9 @@ def _get_wallpaper_com():
     return comtypes.CoCreateInstance(CLSID_DesktopWallpaper, interface=IDesktopWallpaper)
 
 
+_MON_CACHE: tuple | None = None
+
+
 def get_monitors() -> list[dict]:
     """[{id, w, h, left, top}]，物理像素（进程已声明 per-monitor DPI aware）。
 
@@ -64,6 +67,10 @@ def get_monitors() -> list[dict]:
     COMError(E_FAIL)，而 COMError 不是 OSError 子类——必须宽捕，否则单块屏失败
     会让整次渲染崩掉（2026-11-09 壁纸不更新的真因）。
     """
+    global _MON_CACHE
+    now = time.monotonic()
+    if _MON_CACHE and now - _MON_CACHE[0] < 10.0:
+        return [dict(m) for m in _MON_CACHE[1]]
     dw = _get_wallpaper_com()
     monitors = []
     count = dw.GetMonitorDevicePathCount()
@@ -78,7 +85,9 @@ def get_monitors() -> list[dict]:
             continue
         if w > 0 and h > 0:
             monitors.append({"id": mid, "w": w, "h": h, "left": int(rc.left), "top": int(rc.top)})
-    return monitors
+    if monitors:  # 缓存 10s：显示器很少变，省掉每次渲染的 COM 往返
+        _MON_CACHE = (now, monitors)
+    return [dict(m) for m in monitors]
 
 
 _STYLE_WORDS = {"regular", "bold", "light", "medium", "heavy", "black", "italic", "oblique",
@@ -177,17 +186,18 @@ def _load_font(bold: bool, size: int, font_file: str | None = None) -> tuple[Ima
 
 def _blur_bg(cover: Image.Image | None, w: int, h: int, cfg: dict) -> Image.Image:
     if cover is not None:
-        # 全是模糊，双线性足够；直接在 1/3 尺寸上等比铺满裁剪+模糊再放大（~10x 提速，视觉无差）
-        sw, sh = max(2, w // 3), max(2, h // 3)
+        # 背景本身就是模糊图：1/4 尺寸上算完再放大（BOX 缩小最快，视觉无差）
+        sw, sh = max(2, w // 4), max(2, h // 4)
         im = cover.convert("RGB")
         scale = max(sw / im.width, sh / im.height)
-        im = im.resize((max(sw, int(im.width * scale + 0.5)), max(sh, int(im.height * scale + 0.5))), Image.BILINEAR)
+        im = im.resize((max(sw, int(im.width * scale + 0.5)), max(sh, int(im.height * scale + 0.5))), Image.BOX)
         x, y = (im.width - sw) // 2, (im.height - sh) // 2
         bg = im.crop((x, y, x + sw, y + sh))
-        bg = bg.filter(ImageFilter.GaussianBlur(radius=max(4, cfg["blur_radius"]) / 3.0))
-        bg = bg.resize((w, h), Image.BILINEAR)
+        bg = bg.filter(ImageFilter.GaussianBlur(radius=max(4, cfg["blur_radius"]) / 4.0))
+        # 亮度/饱和度是逐像素运算，在小图上做与大图等价（省 ~12ms）
         bg = ImageEnhance.Brightness(bg).enhance(cfg["darken"])
         bg = ImageEnhance.Color(bg).enhance(0.9)
+        bg = bg.resize((w, h), Image.BILINEAR)
     else:
         bg = Image.new("RGB", (w, h))
         d = ImageDraw.Draw(bg)
@@ -395,10 +405,16 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
         cy = (h - ch) // 2 + int(cfg.get("cover_offset_y", 0) or 0)
         fg = cover.convert("RGBA")
         fg = _rounded(fg, max(6, min(cw, ch) // 60))
-        shadow = Image.new("RGBA", (cw + 80, ch + 80), (0, 0, 0, 0))
-        ImageDraw.Draw(shadow).rounded_rectangle([40, 40, cw + 40, ch + 40], radius=max(6, min(cw, ch) // 60),
-                                                 fill=(0, 0, 0, 130))
-        shadow = shadow.filter(ImageFilter.GaussianBlur(18))
+        # 投影在小尺寸上生成再放大（高斯很贵，1/3 尺寸视觉等效）
+        rad = max(6, min(cw, ch) // 60)
+        k = 3
+        sw2, sh2 = max(8, (cw + 80) // k), max(8, (ch + 80) // k)
+        shadow = Image.new("RGBA", (sw2, sh2), (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).rounded_rectangle(
+            [40 // k, 40 // k, (cw + 40) // k, (ch + 40) // k],
+            radius=max(2, rad // k), fill=(0, 0, 0, 130))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(18 / k))
+        shadow = shadow.resize((cw + 80, ch + 80), Image.BILINEAR)
         bg.alpha_composite(shadow, (cx - 40, cy - 40))
         bg.alpha_composite(fg, (cx, cy))
     else:
