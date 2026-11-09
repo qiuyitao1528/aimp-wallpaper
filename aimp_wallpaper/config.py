@@ -29,7 +29,7 @@ CONFIG_PATH = _resolve_config_path()
 DEFAULTS = {
     # 壁纸
     "bg_style": "blur",         # 背景方案 blur/blur_vignette/sharp/gradient
-    "blur_type": "gauss",       # 模糊类型 gauss/box/motion/zoom/pixel/median/glass/dof/spin（blur 类方案下生效）
+    "blur_type": "gauss",       # 模糊类型 gauss/soft/fog/glow（高斯系四变体，blur 类方案下生效）
     "blur_radius": 28,          # 背景模糊半径（各模糊类型共用的强度基准）
     "darken": 0.75,             # 背景压暗系数 0~1
     "theme_night_follow": False,  # 跟随系统日/夜主题（深色主题叠黑色遮罩）
@@ -111,6 +111,8 @@ _MIGRATE_FROM_SUB = [
 
 
 def _migrate(cfg: dict, data: dict) -> None:
+    if data.get("blur_type") not in (None, "gauss", "soft", "fog", "glow"):
+        cfg["blur_type"] = "gauss"  # v0.2.4 的六种非高斯类型已删，旧值回落标准高斯
     for new, old in _MIGRATE_FROM_SUB:
         if new not in data:
             cfg[new] = cfg.get(old)

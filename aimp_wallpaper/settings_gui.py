@@ -19,9 +19,7 @@ ALIGN_ITEMS = [("左对齐", "left"), ("居中", "center"), ("右对齐", "right
 VALIGN_ITEMS = [("顶部", "top"), ("居中", "center"), ("底部", "bottom")]
 BG_CHOICES = [("高斯模糊", "blur"), ("模糊+暗角", "blur_vignette"),
               ("原图铺满", "sharp"), ("主色渐变", "gradient")]
-BLUR_TYPE_ITEMS = [("高斯", "gauss"), ("方框", "box"), ("运动", "motion"), ("缩放", "zoom"),
-                   ("像素化", "pixel"), ("中值", "median"), ("玻璃", "glass"),
-                   ("景深", "dof"), ("旋转", "spin")]
+BLUR_TYPE_ITEMS = [("高斯", "gauss"), ("柔焦", "soft"), ("雾面", "fog"), ("辉光", "glow")]
 NIGHT_ALPHA_CHOICES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]
 OVERFLOW_ITEMS = [("换行", "wrap"), ("省略号", "ellipsis")]
 SPACE_WRAP_ITEMS = [("关", "0"), ("2", "2"), ("3", "3"), ("4", "4"),

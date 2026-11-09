@@ -35,7 +35,7 @@ os.makedirs(os.path.dirname(old_cfg_path), exist_ok=True)
 with open(old_cfg_path, "w", encoding="utf-8") as f:
     json.dump({"text_shadow": False, "sub_font_file": "simhei.ttf", "sub_bold": True,
                "sub_color": "#FF0000", "sub_overflow": "wrap", "sub_size_ratio": 0.03,
-               "wrap_space_window": 3}, f)
+               "wrap_space_window": 3, "blur_type": "motion"}, f)
 config.CONFIG_PATH, _saved_path = old_cfg_path, config.CONFIG_PATH
 cfg = config.load()
 check("migrate artist_size", cfg["artist_size_ratio"] == 0.03)
@@ -47,6 +47,7 @@ check("migrate shadows off", cfg["title_shadow"] is False and cfg["artist_shadow
       and cfg["album_shadow"] is False)
 check("migrate wrap windows", cfg["title_space_window"] == 3 and cfg["artist_space_window"] == 3
       and cfg["album_space_window"] == 3)
+check("migrate blur type to gauss", cfg["blur_type"] == "gauss")
 
 new_cfg_path = os.path.join(tmp, "new", "config.json")
 os.makedirs(os.path.dirname(new_cfg_path), exist_ok=True)
@@ -283,8 +284,8 @@ sg.autostart_enabled = None
 
 print()
 
-# ---------- G. 模糊类型：gauss/box/motion/zoom/pixel/median/glass/dof/spin ----------
-BLUR_TYPES = ("gauss", "box", "motion", "zoom", "pixel", "median", "glass", "dof", "spin")
+# ---------- G. 模糊类型：高斯系四变体 gauss/soft/fog/glow ----------
+BLUR_TYPES = ("gauss", "soft", "fog", "glow")
 blurs = {}
 for t in BLUR_TYPES:
     c = dict(config.DEFAULTS)
@@ -296,34 +297,30 @@ for t in BLUR_TYPES:
     blurs[t] = ab
     check(f"blur_type {t} ok", b.size == (W, H), f"mean={ab.mean():.1f} {ms:.0f}ms")
     check(f"blur_type {t} fast", ms < 800, f"{ms:.0f}ms")
-for t in ("box", "motion", "zoom", "pixel", "median", "glass", "dof", "spin"):
+for t in ("soft", "fog", "glow"):
     d = float(np.abs(blurs[t] - blurs["gauss"]).mean())
     check(f"blur_type {t} differs from gauss", d > 0.2, f"meandiff={d:.2f}")
-# 像素化应有块状结构（块内几乎零差异）
-px = blurs["pixel"]
-inner = px[100:164, 100:164]
-check("pixel blocky", float(np.abs(np.diff(inner, axis=0)).mean()) < 1.0,
-      f"inner hf={float(np.abs(np.diff(inner, axis=0)).mean()):.3f}")
-# 玻璃：固定种子 → 两次渲染结果逐像素一致
-cg = dict(config.DEFAULTS); cg.update(bg_style="blur", blur_type="glass", blur_radius=60,
-                                      darken=0.75, theme_night_follow=False)
-g1 = arr(wallpaper._blur_bg(cover_img, W, H, cg))
-g2 = arr(wallpaper._blur_bg(cover_img, W, H, cg))
-check("glass deterministic", float(np.abs(g1 - g2).max()) == 0.0)
-# 景深：中心比角落更"有细节"（高频能量更高）
-cd = dict(config.DEFAULTS); cd.update(bg_style="blur", blur_type="dof", blur_radius=60,
-                                      darken=0.75, theme_night_follow=False)
-dof = arr(wallpaper._blur_bg(cover_img, W, H, cd))
-cen = dof[H // 2 - 100:H // 2 + 100, W // 2 - 100:W // 2 + 100]
-cor = dof[0:200, 0:200]
-hf_c = float(np.abs(np.diff(cen, axis=0)).mean())
-hf_e = float(np.abs(np.diff(cor, axis=0)).mean())
-check("dof center sharper", hf_c > hf_e * 1.2, f"center={hf_c:.2f} corner={hf_e:.2f}")
+def struct_res(a):  # 结构残差：输出 vs 自身 1/16 降采样回放大（越无结构越小）
+    small = np.asarray(Image.fromarray(a.astype(np.uint8))
+                       .resize((W // 16, H // 16), Image.BOX).resize((W, H), Image.BILINEAR),
+                       dtype=np.float64)
+    return float(np.abs(a - small).mean())
+check("glow brighter than gauss", blurs["glow"].mean() > blurs["gauss"].mean(),
+      f"glow={blurs['glow'].mean():.1f} gauss={blurs['gauss'].mean():.1f}")
+check("soft close to gauss", float(np.abs(blurs["soft"] - blurs["gauss"]).mean()) < 15.0,
+      f"meandiff={float(np.abs(blurs['soft'] - blurs['gauss']).mean()):.2f}")
+# 雾面强度越大越无结构（r=100 的结构残差 < r=40）
+cf = dict(config.DEFAULTS); cf.update(bg_style="blur", blur_type="fog", darken=0.75,
+                                      theme_night_follow=False)
+r100 = arr(wallpaper._blur_bg(cover_img, W, H, {**cf, "blur_radius": 100}))
+r40 = arr(wallpaper._blur_bg(cover_img, W, H, {**cf, "blur_radius": 40}))
+check("fog stronger=flatter", struct_res(r100) < struct_res(r40),
+      f"r100={struct_res(r100):.3f} r40={struct_res(r40):.3f}")
 # 缓存键区分类型
 wallpaper._BG_CACHE.clear()
 c1 = dict(config.DEFAULTS); c1.update(bg_style="blur", blur_type="gauss", blur_radius=60,
                                       darken=0.75, theme_night_follow=False)
-c2 = {**c1, "blur_type": "box"}
+c2 = {**c1, "blur_type": "soft"}
 wallpaper._get_bg(cover, W, H, c1)
 wallpaper._get_bg(cover, W, H, c2)
 check("bg cache keyed by type", len(wallpaper._BG_CACHE) == 2, f"cached={len(wallpaper._BG_CACHE)}")

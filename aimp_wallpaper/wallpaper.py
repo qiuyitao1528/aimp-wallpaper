@@ -270,93 +270,40 @@ def _night_alpha(cfg: dict) -> int:
 
 
 def _apply_blur_type(base: Image.Image, cfg: dict) -> Image.Image:
-    """模糊类型分发（blur/blur_vignette 方案下生效，都在 1/4 小图上算）：
+    """模糊类型分发（blur/blur_vignette 方案下生效，都在 1/4 小图上算）。
 
-    gauss=高斯（默认）/ box=方框 / motion=水平运动拖影 / zoom=缩放放射 / pixel=像素化 /
-    median=中值（绘画感，去细节保色块）/ glass=毛玻璃（随机扭曲）/ dof=景深（中心清晰四周糊）/
-    spin=旋转（径向拖影）。
+    只保留高斯系四变体（视觉都在"柔糊"一族，无拖影/扭曲/像素化类效果）：
+    gauss=标准高斯（默认）/ soft=柔焦（两级高斯混合，更奶油）/ fog=雾面（重度降采样，均匀雾）/
+    glow=辉光（双层高斯屏幕混合，微微发光）。
     """
     r = max(4, int(cfg.get("blur_radius", 28) or 28))
     t = cfg.get("blur_type", "gauss")
-    if t == "box":
-        return base.filter(ImageFilter.BoxBlur(max(2, r // 5)))
-    if t == "motion":
-        # 水平方向 k 点盒式均值（=运动拖影）。PIL 的 Kernel 只支持 3x3/5x5，
-        # 长条卷积用 numpy 滑窗 cumsum 实现（向量化，O(像素)）
-        k = min(31, max(5, (r // 4) | 1))
-        sw, sh = base.size
-        a = np.asarray(base, dtype=np.float64)
-        half = k // 2
-        p = np.pad(a, ((0, 0), (half, half), (0, 0)), mode="edge")
-        cc = np.cumsum(p, axis=1)
-        cc = np.concatenate([np.zeros((cc.shape[0], 1, 3)), cc], axis=1)
-        streak = (cc[:, k:k + sw] - cc[:, :sw]) / k
-        return Image.fromarray(streak.astype(np.uint8))
-    if t == "zoom":
-        sw, sh = base.size
-        steps = 6
-        maxz = min(1.35, 1.0 + r / 150.0)  # 最大放大倍率随模糊半径增长
-        acc = np.asarray(base, dtype=np.float64)
-        for i in range(1, steps):
-            z = 1.0 + (maxz - 1.0) * i / (steps - 1)
-            cw, ch = max(2, int(sw / z)), max(2, int(sh / z))
-            x, y = (sw - cw) // 2, (sh - ch) // 2
-            acc += np.asarray(base.crop((x, y, x + cw, y + ch)).resize((sw, sh), Image.BILINEAR),
-                              dtype=np.float64)
-        return Image.fromarray((acc / steps).astype(np.uint8))
-    if t == "pixel":
-        sw, sh = base.size
-        k = max(3, r // 3)
-        return base.resize((max(2, sw // k), max(2, sh // k)), Image.BOX).resize((sw, sh), Image.NEAREST)
-    if t == "median":
-        k = min(9, max(3, (r // 6) | 1))  # 中值窗口（奇数），大窗口很慢故封顶 9
-        return base.filter(ImageFilter.MedianFilter(size=k))
-    if t == "glass":
-        # 毛玻璃：平滑随机场做位移扭曲（固定种子→纹理稳定，重渲染不闪变），再轻高斯柔化
-        sw, sh = base.size
-        mag = max(2, r // 6)
-        rng = np.random.default_rng(7)
-        fs = 16  # 随机场降采样倍率：小场放大=平滑扰动
-        fw, fh = max(2, sw // fs), max(2, sh // fs)
-
-        def field():
-            f = rng.uniform(0, 255, size=(fh, fw)).astype(np.uint8)
-            return (np.asarray(Image.fromarray(f, "L").resize((sw, sh), Image.BILINEAR),
-                               dtype=np.float64) / 127.5 - 1.0)
-
-        dx = (field() * mag).round().astype(np.int32)
-        dy = (field() * mag).round().astype(np.int32)
-        ys = np.clip(np.arange(sh)[:, None] + dy, 0, sh - 1)
-        xs = np.clip(np.arange(sw)[None, :] + dx, 0, sw - 1)
-        out = np.asarray(base, dtype=np.uint8)[ys, xs]
-        return Image.fromarray(out).filter(ImageFilter.GaussianBlur(radius=max(1.0, r / 16.0)))
-    if t == "dof":
-        # 景深/移轴：中心保持清晰、四周渐入模糊（composite 的 mask 255=取第一张图，故中心应为 255）
+    if t == "soft":
+        # 柔焦：1/4 与 1/8 两级高斯按 55/45 混合，过渡更奶油、更梦幻
         blurred = base.filter(ImageFilter.GaussianBlur(radius=r / 4.0))
+        tiny = base.resize((max(2, base.width // 2), max(2, base.height // 2)), Image.BOX)
+        creamy = tiny.filter(ImageFilter.GaussianBlur(radius=r / 6.0)).resize(base.size, Image.BILINEAR)
+        return Image.blend(blurred, creamy, 0.45)
+    if t == "fog":
+        # 雾面：重度降采样（倍率随强度）+ 轻高斯再放大，结构化为均匀雾
         sw, sh = base.size
-        yy, xx = np.mgrid[0:sh, 0:sw]
-        dist = np.sqrt(((xx - sw / 2) / (sw / 2)) ** 2 + ((yy - sh / 2) / (sh / 2)) ** 2)
-        alpha = np.clip((dist - 0.35) / 0.45, 0.0, 1.0)  # 中心 0 → 边缘 1
-        mask = Image.fromarray(((1.0 - alpha) * 255).astype(np.uint8), "L")  # 中心 255=清晰
-        return Image.composite(base, blurred, mask)
-    if t == "spin":
-        # 旋转径向拖影：N 步绕中心旋转取平均
-        sw, sh = base.size
-        steps = 6
-        maxang = min(20.0, 4.0 + r / 8.0)
-        acc = np.asarray(base, dtype=np.float64)
-        for i in range(1, steps):
-            ang = maxang * i / (steps - 1)
-            acc += np.asarray(base.rotate(ang, resample=Image.BILINEAR, center=(sw / 2, sh / 2)),
-                              dtype=np.float64)
-        return Image.fromarray((acc / steps).astype(np.uint8))
+        k = max(2, r // 12)
+        fog = base.resize((max(2, sw // k), max(2, sh // k)), Image.BOX)
+        fog = fog.filter(ImageFilter.GaussianBlur(radius=2.0))
+        return fog.resize((sw, sh), Image.BILINEAR)
+    if t == "glow":
+        # 辉光：两个半径的高斯做屏幕混合（255-(255-a)(255-b)/255），高光区微微发光
+        b1 = np.asarray(base.filter(ImageFilter.GaussianBlur(radius=r / 4.0)), dtype=np.float64)
+        b2 = np.asarray(base.filter(ImageFilter.GaussianBlur(radius=r / 2.0)), dtype=np.float64)
+        out = 255.0 - (255.0 - b1) * (255.0 - b2) / 255.0
+        return Image.fromarray(out.astype(np.uint8))
     return base.filter(ImageFilter.GaussianBlur(radius=r / 4.0))
 
 
 def _blur_bg(cover: Image.Image | None, w: int, h: int, cfg: dict) -> Image.Image:
     """背景方案分发：blur=模糊 / blur_vignette=模糊+暗角 / sharp=原图铺满 / gradient=主色渐变。
 
-    blur 类方案的模糊算法由 blur_type 决定（高斯/方框/运动/缩放/像素化）。
+    blur 类方案的模糊算法由 blur_type 决定（高斯/柔焦/雾面/辉光，同属高斯系）。
     跟随日夜主题时，深色主题再叠一层黑色遮罩（浓度=night_overlay%）。
     """
     style = cfg.get("bg_style", "blur")
@@ -386,7 +333,7 @@ def _blur_bg(cover: Image.Image | None, w: int, h: int, cfg: dict) -> Image.Imag
         # 亮度/饱和度是逐像素运算，在小图上做与大图等价（省 ~12ms）
         bg = ImageEnhance.Brightness(bg).enhance(cfg["darken"])
         bg = ImageEnhance.Color(bg).enhance(0.9)
-        bg = bg.resize((w, h), Image.NEAREST if cfg.get("blur_type", "gauss") == "pixel" else Image.BILINEAR)
+        bg = bg.resize((w, h), Image.BILINEAR)
         if style == "blur_vignette":
             bg = _vignette(bg, 120)
     alpha = _night_alpha(cfg)
