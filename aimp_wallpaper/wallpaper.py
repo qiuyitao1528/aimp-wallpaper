@@ -272,16 +272,18 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
         bg = bg.copy()
 
     # 前景清晰封面：保持原分辨率 1:1（绝不放大），超屏才等比缩小；不裁剪、不拉伸
-    cx = int(h * cfg["cover_margin_ratio"])
+    cx = int(h * cfg["cover_margin_ratio"]) + int(cfg.get("cover_offset_x", 0) or 0)
     if cover is not None:
         iw, ih = cover.size
         max_h = int(h * 0.82)
         max_w = int(w * 0.52)
-        scale = min(1.0, max_h / ih, max_w / iw)
-        if scale < 1.0:
+        fit = min(1.0, max_h / ih, max_w / iw)
+        user_scale = max(0.3, min(2.0, float(cfg.get("cover_scale", 1.0) or 1.0)))
+        scale = fit * user_scale
+        if abs(scale - 1.0) > 1e-3:
             cover = cover.resize((max(1, int(iw * scale)), max(1, int(ih * scale))), Image.LANCZOS)
         cw, ch = cover.size
-        cy = (h - ch) // 2
+        cy = (h - ch) // 2 + int(cfg.get("cover_offset_y", 0) or 0)
         fg = cover.convert("RGBA")
         fg = _rounded(fg, max(6, min(cw, ch) // 60))
         shadow = Image.new("RGBA", (cw + 80, ch + 80), (0, 0, 0, 0))
@@ -291,9 +293,10 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
         bg.alpha_composite(shadow, (cx - 40, cy - 40))
         bg.alpha_composite(fg, (cx, cy))
     else:
-        ch = int(h * cfg["cover_height_ratio"])
+        ch = int(int(h * cfg["cover_height_ratio"]) *
+                 max(0.3, min(2.0, float(cfg.get("cover_scale", 1.0) or 1.0))))
         cw = ch
-        cy = (h - ch) // 2
+        cy = (h - ch) // 2 + int(cfg.get("cover_offset_y", 0) or 0)
         d = ImageDraw.Draw(bg)
         d.rounded_rectangle([cx, cy, cx + cw, cy + ch], radius=max(8, ch // 60),
                             fill=(40, 44, 58, 255), outline=(90, 96, 120, 255), width=2)
@@ -307,7 +310,7 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
     # 右侧文字区
     anchor = None
     if cfg["show_text"]:
-        tx = cx + cw + int(h * 0.055)
+        tx = cx + cw + int(h * 0.055) + int(cfg.get("text_offset_x", 0) or 0)
         tw_max = w - tx - int(w * 0.06)
         if tw_max > h * 0.15:
             layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -341,17 +344,32 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
             block_gap = int(h * cfg.get("title_sub_gap_ratio", 0.02))
             th = title_font.size * len(lines) + line_gap * (len(lines) - 1)
             sh = sub_font.size * len(sub_lines) + sub_gap * (len(sub_lines) - 1)
-            ty = cy + (ch - (th + block_gap + sh)) // 2
+            block_h = th + block_gap + sh
+            dy = int(cfg.get("text_offset_y", 0) or 0)
+            valign = cfg.get("text_valign", "center")
+            if valign == "top":
+                ty = cy + dy
+            elif valign == "bottom":
+                ty = cy + ch - block_h + dy
+            else:
+                ty = cy + (ch - block_h) // 2 + dy
+            align = cfg.get("text_align", "left")
+            if align == "center":
+                draw_x, draw_anchor = tx + tw_max // 2, "ma"
+            elif align == "right":
+                draw_x, draw_anchor = tx + tw_max, "ra"
+            else:
+                draw_x, draw_anchor = tx, "la"
             tr, tg, tb = _hex_rgb(cfg.get("title_color"), (255, 255, 255))
             sr, sg, sb = _hex_rgb(cfg.get("sub_color"), (255, 255, 255))
             for ln in lines:
-                _draw_shadow_text(layer, (tx, ty), ln, title_font, fill=(tr, tg, tb, 255),
-                                  stroke_width=title_stroke, shadow=shadow)
+                _draw_shadow_text(layer, (draw_x, ty), ln, title_font, fill=(tr, tg, tb, 255),
+                                  stroke_width=title_stroke, shadow=shadow, anchor=draw_anchor)
                 ty += title_font.size + line_gap
             ty += block_gap
             for s in sub_lines:
-                _draw_shadow_text(layer, (tx, ty), s, sub_font, fill=(sr, sg, sb, 255),
-                                  stroke_width=sub_stroke, shadow=shadow)
+                _draw_shadow_text(layer, (draw_x, ty), s, sub_font, fill=(sr, sg, sb, 255),
+                                  stroke_width=sub_stroke, shadow=shadow, anchor=draw_anchor)
                 ty += sub_font.size + sub_gap
             anchor = (tx, ty - sub_gap)  # 专辑行文字底部
             bg.alpha_composite(layer)

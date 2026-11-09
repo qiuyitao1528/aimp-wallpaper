@@ -32,6 +32,9 @@ DEFAULTS = {
     "darken": 0.75,             # 背景压暗系数 0~1
     "cover_height_ratio": 0.56, # 无封面占位框占屏高比例
     "cover_margin_ratio": 0.12, # 封面左边距占屏高比例
+    "cover_offset_x": 0,        # 封面 X 偏移(像素，可为负)
+    "cover_offset_y": 0,        # 封面 Y 偏移(像素，可为负)
+    "cover_scale": 1.0,         # 封面大小倍率 0.3~2.0
     "title_size_ratio": 0.075,  # 歌名字号占屏高比例
     "sub_size_ratio": 0.042,    # 歌手/专辑字号占屏高比例
     "title_font_file": None,    # 歌名字体文件（None=默认雅黑加粗）
@@ -47,6 +50,10 @@ DEFAULTS = {
     "title_overflow": "wrap",       # 歌名过长：wrap=折行 / ellipsis=省略号
     "sub_overflow": "ellipsis",     # 副行过长：ellipsis=省略号 / wrap=折行（每条最多 2 行）
     "show_text": True,
+    "text_offset_x": 0,         # 文字区 X 偏移(像素)
+    "text_offset_y": 0,         # 文字区 Y 偏移(像素)
+    "text_align": "left",       # 文字水平对齐 left/center/right
+    "text_valign": "center",    # 文字垂直对齐 top/center/bottom
     "restore_on_quit": True,    # 退出时恢复原壁纸（设置里可关）
     # 渲染产物目录（%LOCALAPPDATA%）
     "output_dir": os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "aimp-wallpaper"),
