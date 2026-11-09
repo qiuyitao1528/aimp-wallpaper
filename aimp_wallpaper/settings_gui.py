@@ -209,7 +209,15 @@ class SettingsWindow:
         self.status = ttk.Label(self.win, text="保存后壁纸立即重新渲染", foreground="#888888")
         self.status.grid(row=row + 1, column=0, columnspan=2, pady=(0, 8))
 
-        self.win.transient(root)
+        # transient 只能绑到"可见"父窗：主窗隐藏时绑上去会让设置窗一起不显示
+        if root.winfo_viewable():
+            self.win.transient(root)
+        self.win.deiconify()
+        self.win.lift()
+        try:
+            self.win.focus_force()
+        except Exception:
+            pass
 
     def _save(self):
         def px_to_ratio(var, key, ratio_default, lo, hi):
