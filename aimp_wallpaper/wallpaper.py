@@ -56,7 +56,12 @@ def _get_wallpaper_com():
 
 
 def get_monitors() -> list[dict]:
-    """[{id, w, h, left, top}]，物理像素（进程已声明 per-monitor DPI aware）。"""
+    """[{id, w, h, left, top}]，物理像素（进程已声明 per-monitor DPI aware）。
+
+    系统会登记已断开的显示器（如合盖外接时的笔记本屏），对它 GetMonitorRECT 抛
+    COMError(E_FAIL)，而 COMError 不是 OSError 子类——必须宽捕，否则单块屏失败
+    会让整次渲染崩掉（2026-11-09 壁纸不更新的真因）。
+    """
     dw = _get_wallpaper_com()
     monitors = []
     count = dw.GetMonitorDevicePathCount()
@@ -67,7 +72,7 @@ def get_monitors() -> list[dict]:
         try:
             rc = dw.GetMonitorRECT(mid)
             w, h = rc.right - rc.left, rc.bottom - rc.top
-        except OSError:
+        except Exception:  # COMError / OSError：断开的显示器跳过
             continue
         if w > 0 and h > 0:
             monitors.append({"id": mid, "w": w, "h": h, "left": int(rc.left), "top": int(rc.top)})
