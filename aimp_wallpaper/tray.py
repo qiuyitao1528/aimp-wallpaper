@@ -21,7 +21,8 @@ def _load_image():
 
 
 class Tray:
-    def __init__(self, root, on_settings, on_toggle_vis, on_restore, on_quit):
+    def __init__(self, root, on_settings, on_toggle_vis, on_restore, on_quit,
+                 on_toggle_lyrics=None):
         import pystray
 
         from . import applog
@@ -36,15 +37,17 @@ class Tray:
                     applog.log_exc("托盘 after 调度异常:\n", *sys.exc_info())
             threading.Thread(target=run, daemon=True, name=f"tray-post-{name}").start()
 
+        items = [
+            pystray.MenuItem("设置…", lambda: post("设置", on_settings), default=True),
+            pystray.MenuItem("显示 / 隐藏频谱面板", lambda: post("开关可视化", on_toggle_vis)),
+            pystray.MenuItem("显示 / 隐藏歌词", lambda: post("开关歌词", on_toggle_lyrics),
+                             visible=lambda item: on_toggle_lyrics is not None),
+            pystray.MenuItem("恢复原壁纸", lambda: post("恢复原壁纸", on_restore)),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("退出", lambda: post("退出", on_quit)),
+        ]
         self._icon = pystray.Icon(
-            "aimp-wallpaper", _load_image(), "AIMP Wallpaper",
-            pystray.Menu(
-                pystray.MenuItem("设置…", lambda: post("设置", on_settings), default=True),
-                pystray.MenuItem("显示 / 隐藏频谱面板", lambda: post("开关可视化", on_toggle_vis)),
-                pystray.MenuItem("恢复原壁纸", lambda: post("恢复原壁纸", on_restore)),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("退出", lambda: post("退出", on_quit)),
-            ))
+            "aimp-wallpaper", _load_image(), "AIMP Wallpaper", pystray.Menu(*items))
         threading.Thread(target=self._icon.run, daemon=True, name="tray").start()
         applog.log("托盘已创建")
 

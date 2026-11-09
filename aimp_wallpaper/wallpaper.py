@@ -577,10 +577,11 @@ def _hex_rgb(value, default: tuple[int, int, int]) -> tuple[int, int, int]:
 
 
 def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: dict,
-                  want_anchor: bool = False, bg: Image.Image | None = None):
+                  want_anchor: bool = False, bg: Image.Image | None = None, paused: bool = False):
     """渲染海报。want_anchor=True 时返回 (img, anchor)，anchor=(文字区左缘x, 专辑行底部y)。
 
     bg 可传入缓存的模糊背景（RGBA，会被 copy 后使用）；cover 为 None 时背景由 bg 决定仍适用。
+    paused=True 时按 pause_mode 压暗/画「已暂停」角标。
     """
     cover = _open_cover(cover_bytes)
 
@@ -588,6 +589,11 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
         bg = _blur_bg(cover, w, h, cfg).convert("RGBA")
     else:
         bg = bg.copy()
+
+    if paused and cfg.get("pause_mode") in ("darken", "both"):
+        pct = max(0, min(95, int(cfg.get("pause_darken", 30) or 0)))
+        if pct:  # 压暗在缓存背景的副本上做，不污染 _BG_CACHE
+            bg.alpha_composite(Image.new("RGBA", bg.size, (0, 0, 0, pct * 255 // 100)))
 
     # 前景清晰封面：保持原分辨率 1:1（绝不放大），超屏才等比缩小；不裁剪、不拉伸
     cx = int(h * cfg["cover_margin_ratio"]) + int(cfg.get("cover_offset_x", 0) or 0)
@@ -602,19 +608,28 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
             cover = cover.resize((max(1, int(iw * scale)), max(1, int(ih * scale))), Image.LANCZOS)
         cw, ch = cover.size
         cy = (h - ch) // 2 + int(cfg.get("cover_offset_y", 0) or 0)
+        rad = int(cfg.get("cover_radius", 0) or 0)
+        if rad <= 0:  # 0=自动：沿用写死时代的短边/60
+            rad = max(6, min(cw, ch) // 60)
         fg = cover.convert("RGBA")
-        fg = _rounded(fg, max(6, min(cw, ch) // 60))
-        # 投影在小尺寸上生成再放大（高斯很贵，1/3 尺寸视觉等效）
-        rad = max(6, min(cw, ch) // 60)
-        k = 3
-        sw2, sh2 = max(8, (cw + 80) // k), max(8, (ch + 80) // k)
-        shadow = Image.new("RGBA", (sw2, sh2), (0, 0, 0, 0))
-        ImageDraw.Draw(shadow).rounded_rectangle(
-            [40 // k, 40 // k, (cw + 40) // k, (ch + 40) // k],
-            radius=max(2, rad // k), fill=(0, 0, 0, 130))
-        shadow = shadow.filter(ImageFilter.GaussianBlur(18 / k))
-        shadow = shadow.resize((cw + 80, ch + 80), Image.BILINEAR)
-        bg.alpha_composite(shadow, (cx - 40, cy - 40))
+        fg = _rounded(fg, rad)
+        sa = max(0, min(255, int(cfg.get("cover_shadow_alpha", 130) or 0)))
+        if sa:  # 投影在小尺寸上生成再放大（高斯很贵，1/3 尺寸视觉等效）
+            so = max(4, int(cfg.get("cover_shadow_offset", 40) or 40))
+            k = 3
+            sw2, sh2 = max(8, (cw + 2 * so) // k), max(8, (ch + 2 * so) // k)
+            shadow = Image.new("RGBA", (sw2, sh2), (0, 0, 0, 0))
+            ImageDraw.Draw(shadow).rounded_rectangle(
+                [so // k, so // k, (cw + so) // k, (ch + so) // k],
+                radius=max(2, rad // k), fill=(0, 0, 0, sa))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(18 / k))
+            shadow = shadow.resize((cw + 2 * so, ch + 2 * so), Image.BILINEAR)
+            bg.alpha_composite(shadow, (cx - so, cy - so))
+        csw = max(0, min(8, int(cfg.get("cover_stroke_w", 0) or 0)))
+        if csw:  # 封面描边画在 fg 圆角边界上
+            csrgb = _hex_rgb(cfg.get("cover_stroke_color"), (0, 0, 0))
+            ImageDraw.Draw(fg).rounded_rectangle([0, 0, cw - 1, ch - 1], radius=rad,
+                                                 outline=(*csrgb, 255), width=csw)
         bg.alpha_composite(fg, (cx, cy))
     else:
         ch = int(int(h * cfg["cover_height_ratio"]) *
@@ -708,6 +723,22 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                     ty += font.size + _intra(g)
             anchor = (tx, ty - _intra(blocks[-1][0]))  # 末行文字底部
             bg.alpha_composite(layer)
+    if paused and cfg.get("pause_mode") in ("badge", "both"):
+        # 「已暂停」角标：屏幕右下角半透明圆角黑底白字（与 show_text 无关）
+        d = ImageDraw.Draw(bg)
+        px = int(h * float(cfg.get("sub_size_ratio", 0.042) or 0.042))
+        bfont, _ = _load_font(True, px, None)
+        text = "已暂停"
+        tw = _text_len(d, text, bfont)
+        pad = max(10, px // 3)
+        pill_w, pill_h = int(tw + pad * 2), int(px + pad)
+        x1 = w - int(w * 0.04) - pill_w
+        y1 = h - int(h * 0.05) - pill_h
+        d.rounded_rectangle([x1, y1, x1 + pill_w, y1 + pill_h], radius=pill_h // 2,
+                            fill=(0, 0, 0, 150))
+        _draw_shadow_text(bg, (x1 + pill_w / 2, y1 + pill_h / 2), text, bfont,
+                          fill=(255, 255, 255, 235), anchor="mm", shadow=False,
+                          stroke_width=max(1, px // 24), stroke_fill=(0, 0, 0, 120))
     img = bg.convert("RGB")
     if want_anchor:
         return img, anchor
@@ -749,9 +780,10 @@ def _get_bg(cover_bytes: bytes | None, w: int, h: int, cfg: dict) -> Image.Image
     return bg
 
 
-def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors: list[dict]) -> list[str]:
+def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors: list[dict],
+                     paused: bool = False) -> list[str]:
     """逐屏渲染并设置；PNG 输出避免 JPEG 压缩发虚（compress_level=1 提速编码）。
-    首屏锚点（专辑行位置）写盘供可视化面板跟随。"""
+    首屏锚点（专辑行位置）写盘供可视化面板跟随。paused=按 pause_mode 叠加暂停反馈。"""
     out_dir = cfg["output_dir"]
     os.makedirs(out_dir, exist_ok=True)
     dw = _get_wallpaper_com()
@@ -762,7 +794,7 @@ def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors:
     for i, m in enumerate(targets):
         bg = _get_bg(cover_bytes, m["w"], m["h"], cfg)
         img, anchor_i = render_poster(cover_bytes, meta, m["w"], m["h"], cfg,
-                                      want_anchor=True, bg=bg)
+                                      want_anchor=True, bg=bg, paused=paused)
         if i == 0:
             anchor = anchor_i
         path = os.path.join(out_dir, f"wallpaper_{m['w']}x{m['h']}.png")

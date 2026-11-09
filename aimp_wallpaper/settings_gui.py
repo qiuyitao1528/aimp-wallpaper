@@ -20,6 +20,10 @@ VALIGN_ITEMS = [("顶部", "top"), ("居中", "center"), ("底部", "bottom")]
 BG_CHOICES = [("高斯模糊", "blur"), ("模糊+暗角", "blur_vignette"),
               ("原图铺满", "sharp"), ("主色渐变", "gradient")]
 BLUR_TYPE_ITEMS = [("高斯", "gauss"), ("柔焦", "soft"), ("雾面", "fog"), ("辉光", "glow")]
+COVER_RADIUS_ITEMS = [("自动", 0), ("4", 4), ("8", 8), ("12", 12),
+                      ("16", 16), ("24", 24), ("32", 32), ("48", 48)]
+SHADOW_ALPHA_CHOICES = [0, 40, 70, 100, 130, 160, 200]
+PAUSE_MODE_ITEMS = [("关", "off"), ("压暗", "darken"), ("角标", "badge"), ("压暗+角标", "both")]
 NIGHT_ALPHA_CHOICES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]
 OVERFLOW_ITEMS = [("换行", "wrap"), ("省略号", "ellipsis")]
 SPACE_WRAP_ITEMS = [("关", "0"), ("2", "2"), ("3", "3"), ("4", "4"),
@@ -155,8 +159,21 @@ class SettingsWindow:
                                cfg.get("theme_night_follow", False))
         self.night_alpha_var = combo(pg, "夜间遮罩浓度(%)", NIGHT_ALPHA_CHOICES,
                                      int(cfg.get("night_overlay", 30) or 30))
+        self.cover_radius_var = labeled(pg, "封面圆角(像素)", COVER_RADIUS_ITEMS,
+                                        int(cfg.get("cover_radius", 0) or 0))
+        self.cover_sa_var = combo(pg, "封面阴影浓度", SHADOW_ALPHA_CHOICES,
+                                  int(cfg.get("cover_shadow_alpha", 130) or 0))
+        self.cover_so_var = combo(pg, "封面阴影偏移(像素)", OFFSET_CHOICES,
+                                  int(cfg.get("cover_shadow_offset", 40) or 40))
+        self.cover_sw_var = combo(pg, "封面描边宽(像素)", [0, 1, 2, 3, 4, 6],
+                                  int(cfg.get("cover_stroke_w", 0) or 0))
+        self.cover_sc_var = self._color_row(add, pg, "封面描边色", "cover_stroke_color", "#000000")
         self.cover_scale_var = combo(pg, "封面大小(倍率)", SCALE_CHOICES,
                                      cfg.get("cover_scale", 1.0) or 1.0)
+        self.pause_mode_var = labeled(pg, "暂停显示", PAUSE_MODE_ITEMS,
+                                      cfg.get("pause_mode", "darken"))
+        self.pause_dark_var = combo(pg, "暂停压暗浓度(%)", NIGHT_ALPHA_CHOICES,
+                                    int(cfg.get("pause_darken", 30) or 30))
         self.cover_dx_var = combo(pg, "封面 X 偏移(像素)", OFFSET_CHOICES,
                                   int(cfg.get("cover_offset_x", 0) or 0))
         self.cover_dy_var = combo(pg, "封面 Y 偏移(像素)", OFFSET_CHOICES,
@@ -198,10 +215,23 @@ class SettingsWindow:
         self.text_align_var = labeled(pg, "文字水平对齐", ALIGN_ITEMS, cfg.get("text_align", "left"))
         self.text_valign_var = labeled(pg, "文字垂直对齐", VALIGN_ITEMS, cfg.get("text_valign", "center"))
 
-        # ---------------- 面板 ----------------
+        # ---------------- 面板（频谱 + 歌词） ----------------
         pg = self._pages["面板"]
         self.fps_var = combo(pg, "刷新率(FPS)", FPS_CHOICES, int(cfg.get("vis_fps", 30) or 30))
         self.lock_var = check(pg, "锁定频谱面板（禁拖动，仍跟随壁纸）", cfg.get("vis_locked"))
+        self.lyr_show_var = check(pg, "显示歌词（跟随频谱面板）", not cfg.get("lyrics_hidden", False))
+        self.lyr_font_var = combo(pg, "歌词字体",
+                                  [self._default_label] + [lb for lb, _ in self._fonts],
+                                  self._file_to_label.get(cfg.get("lyrics_font_file"),
+                                                          self._default_label),
+                                  width=28)
+        self.lyr_px_var = combo(pg, "歌词字号(像素)", SIZE_CHOICES, px_of("lyrics_size_ratio", 0.032))
+        self.lyr_color_var = self._color_row(add, pg, "歌词颜色", "lyrics_color", "#FFFFFF")
+        self.lyr_next_var = self._color_row(add, pg, "下一行颜色", "lyrics_next_color", "#B0B0B0")
+        self.lyr_sw_var = combo(pg, "歌词描边宽(像素)", [0, 1, 2, 3, 4],
+                                int(cfg.get("lyrics_stroke_w", 2) or 0))
+        self.lyr_sc_var = self._color_row(add, pg, "歌词描边色", "lyrics_stroke_color", "#000000")
+        self.lyr_shadow_var = check(pg, "歌词阴影", cfg.get("lyrics_shadow", True))
 
         # ---------------- 系统 ----------------
         pg = self._pages["系统"]
@@ -255,6 +285,13 @@ class SettingsWindow:
         self._int(self.blur_var, "blur_radius", 4, 200)
         self.cfg["theme_night_follow"] = self.night_var.get()
         self._int(self.night_alpha_var, "night_overlay", 0, 95)
+        self.cfg["cover_radius"] = dict(COVER_RADIUS_ITEMS).get(self.cover_radius_var.get(), 0)
+        self._int(self.cover_sa_var, "cover_shadow_alpha", 0, 255)
+        self._int(self.cover_so_var, "cover_shadow_offset", 0, 300)
+        self._int(self.cover_sw_var, "cover_stroke_w", 0, 8)
+        self.cfg["cover_stroke_color"] = self.cover_sc_var.get()
+        self.cfg["pause_mode"] = dict(PAUSE_MODE_ITEMS).get(self.pause_mode_var.get(), "darken")
+        self._int(self.pause_dark_var, "pause_darken", 0, 95)
         self._float(self.cover_scale_var, "cover_scale", 0.3, 2.0)
         self._int(self.cover_dx_var, "cover_offset_x", -2000, 2000)
         self._int(self.cover_dy_var, "cover_offset_y", -2000, 2000)
@@ -276,6 +313,14 @@ class SettingsWindow:
         self._int(self.text_dx_var, "text_offset_x", -2000, 2000)
         self._int(self.text_dy_var, "text_offset_y", -2000, 2000)
         self._int(self.fps_var, "vis_fps", 10, 120)
+        self.cfg["lyrics_hidden"] = not self.lyr_show_var.get()
+        self.cfg["lyrics_font_file"] = self._label_to_file.get(self.lyr_font_var.get())
+        self._int(self.lyr_px_var, "lyrics_size_ratio", 10, self.screen_h, ratio=True)
+        self.cfg["lyrics_color"] = self.lyr_color_var.get()
+        self.cfg["lyrics_next_color"] = self.lyr_next_var.get()
+        self._int(self.lyr_sw_var, "lyrics_stroke_w", 0, 6)
+        self.cfg["lyrics_stroke_color"] = self.lyr_sc_var.get()
+        self.cfg["lyrics_shadow"] = self.lyr_shadow_var.get()
 
         self.cfg["text_align"] = dict(ALIGN_ITEMS).get(self.text_align_var.get(), "left")
         self.cfg["text_valign"] = dict(VALIGN_ITEMS).get(self.text_valign_var.get(), "center")

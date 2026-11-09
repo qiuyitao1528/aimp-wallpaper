@@ -39,6 +39,14 @@ DEFAULTS = {
     "cover_offset_x": 0,        # 封面 X 偏移(像素，可为负)
     "cover_offset_y": 0,        # 封面 Y 偏移(像素，可为负)
     "cover_scale": 1.0,         # 封面大小倍率 0.3~2.0
+    "cover_radius": 0,          # 封面圆角半径（0=自动=短边/60）
+    "cover_shadow_alpha": 130,  # 封面阴影浓度（0=无阴影）
+    "cover_shadow_offset": 40,  # 封面阴影外扩偏移(像素)
+    "cover_stroke_w": 0,        # 封面描边宽（0=关）
+    "cover_stroke_color": "#000000",  # 封面描边色
+    # 暂停状态显示
+    "pause_mode": "darken",     # off=不处理 / darken=压暗 / badge=角标 / both
+    "pause_darken": 30,         # 暂停压暗浓度（%）
     # 每行样式（title=歌名 / artist=歌手 / album=专辑；sub_* 为旧版迁移源，仅作回退）
     "title_size_ratio": 0.075,  # 歌名字号占屏高比例
     "artist_size_ratio": 0.042, # 歌手字号占屏高比例
@@ -80,6 +88,17 @@ DEFAULTS = {
     "title_bracket_break": True,    # 歌名括号断行：断点落在括号组内时吸收闭合括号或整组下移
     "artist_bracket_break": True,   # 歌手括号断行
     "album_bracket_break": True,    # 专辑括号断行
+    # 歌词悬浮窗（样式与壁纸歌名行同源，迁移时从 title_* 播种）
+    "lyrics_hidden": False,     # True=隐藏歌词窗
+    "lyrics_locked": False,     # 锁定=禁拖动（仍跟随锚点）
+    "lyrics_pos": None,         # 手动定位 [x, y]（拖过后粘滞）
+    "lyrics_font_file": None,   # 歌词字体（None=默认雅黑加粗）
+    "lyrics_size_ratio": 0.032, # 当前歌词行字号占屏高比例
+    "lyrics_color": "#FFFFFF",  # 当前歌词行颜色
+    "lyrics_next_color": "#B0B0B0",  # 下一行颜色
+    "lyrics_stroke_w": 2,       # 歌词描边宽（0=关）
+    "lyrics_stroke_color": "#000000",  # 歌词描边色
+    "lyrics_shadow": True,      # 歌词阴影
     "show_text": True,
     "text_offset_x": 0,         # 文字区 X 偏移(像素)
     "text_offset_y": 0,         # 文字区 Y 偏移(像素)
@@ -113,6 +132,11 @@ _MIGRATE_FROM_SUB = [
 def _migrate(cfg: dict, data: dict) -> None:
     if data.get("blur_type") not in (None, "gauss", "soft", "fog", "glow"):
         cfg["blur_type"] = "gauss"  # v0.2.4 的六种非高斯类型已删，旧值回落标准高斯
+    # 歌词样式与壁纸歌名行保持一致（首次升级时播种，之后各自独立）
+    for lyr, title in (("lyrics_font_file", "title_font_file"), ("lyrics_color", "title_color"),
+                       ("lyrics_shadow", "title_shadow")):
+        if lyr not in data:
+            cfg[lyr] = cfg.get(title)
     for new, old in _MIGRATE_FROM_SUB:
         if new not in data:
             cfg[new] = cfg.get(old)

@@ -233,6 +233,12 @@ win._line_vars["artist"]["bracket"].set(False)
 win.bg_style_var.set("模糊+暗角")
 win.night_var.set(True)
 win.night_alpha_var.set("70")
+win.cover_radius_var.set("24")
+win.cover_sa_var.set("70")
+win.cover_sw_var.set("2")
+win.pause_mode_var.set("角标")
+win.pause_dark_var.set("50")
+win.lyr_show_var.set(True)
 win._save()
 root.destroy()
 with open(config.CONFIG_PATH, encoding="utf-8") as f:
@@ -251,6 +257,12 @@ check("gui save bracket per line", saved.get("title_bracket_break") is False
       and saved.get("artist_bracket_break") is False and saved.get("album_bracket_break") is True,
       f"{saved.get('title_bracket_break')}/{saved.get('artist_bracket_break')}/{saved.get('album_bracket_break')}")
 check("gui save ratio", abs(saved.get("artist_size_ratio", 0) - gui_cfg["artist_size_ratio"]) < 1e-6)
+check("gui save cover style", saved.get("cover_radius") == 24 and saved.get("cover_shadow_alpha") == 70
+      and saved.get("cover_stroke_w") == 2,
+      f"{saved.get('cover_radius')}/{saved.get('cover_shadow_alpha')}/{saved.get('cover_stroke_w')}")
+check("gui save pause", saved.get("pause_mode") == "badge" and saved.get("pause_darken") == 50,
+      f"{ascii(saved.get('pause_mode'))}/{saved.get('pause_darken')}")
+check("gui save lyrics show", saved.get("lyrics_hidden") is False)
 
 print()
 
@@ -335,6 +347,85 @@ c2 = {**c1, "blur_type": "soft"}
 wallpaper._get_bg(cover, W, H, c1)
 wallpaper._get_bg(cover, W, H, c2)
 check("bg cache keyed by type", len(wallpaper._BG_CACHE) == 2, f"cached={len(wallpaper._BG_CACHE)}")
+
+print()
+
+# ---------- H. 歌词 + 封面样式 + 暂停显示 ----------
+from aimp_wallpaper.lyrics import LyricsWindow, fetch_lrc, parse_lrc  # noqa: E402
+
+lrc = "[ti:x]\n[00:01.50]第一句\n[00:03]第二句<00:03.20>词级\n[offset:500]\n[00:05.00]第三句\n"
+parsed = parse_lrc(lrc)
+check("lrc count", len(parsed) == 3, str(parsed))
+check("lrc offset", parsed[2][0] == 5500, str(parsed[2]))
+check("lrc wordtag stripped", parsed[1][1] == "第二句词级", ascii(parsed[1][1]))
+
+# 本地 .lrc 链路（不联网）
+lrc_dir = tempfile.mkdtemp(prefix="aw_lrc_")
+song_dir = os.path.join(lrc_dir, "music")
+os.makedirs(song_dir)
+with open(os.path.join(song_dir, "testsong.lrc"), "w", encoding="utf-8") as f:
+    f.write("[00:01.00]hello\n")
+got = fetch_lrc("testsong", "someone", None, os.path.join(lrc_dir, "cache"),
+                os.path.join(song_dir, "testsong.mp3"))
+check("lrc local fetch", bool(got) and got[0][1] == "hello", str(got))
+
+# 歌词样式播种：旧配置无 lyrics_* 键 → 从 title_* 播种
+seed_path = os.path.join(tmp, "seed", "config.json")
+os.makedirs(os.path.dirname(seed_path), exist_ok=True)
+with open(seed_path, "w", encoding="utf-8") as f:
+    json.dump({"title_font_file": "simhei.ttf", "title_color": "#FFE000", "title_shadow": False}, f)
+config.CONFIG_PATH = seed_path
+cfg2 = config.load()
+check("lyrics style seeded", cfg2["lyrics_font_file"] == "simhei.ttf"
+      and cfg2["lyrics_color"] == "#FFE000" and cfg2["lyrics_shadow"] is False,
+      f"{cfg2['lyrics_font_file']}/{cfg2['lyrics_color']}/{cfg2['lyrics_shadow']}")
+config.CONFIG_PATH = _saved_path
+
+# 封面样式键：圆角/描边/去阴影各自产生可见差异
+cfg_c = dict(config.DEFAULTS)
+cfg_c.update(bg_style="blur", blur_radius=60, darken=0.75, show_text=True, theme_night_follow=False)
+base_c = arr(wallpaper.render_poster(cover, meta, W, H, cfg_c))
+check("cover radius works", np.abs(arr(wallpaper.render_poster(
+    cover, meta, W, H, {**cfg_c, "cover_radius": 48})) - base_c).sum() > 1000)
+check("cover stroke works", np.abs(arr(wallpaper.render_poster(
+    cover, meta, W, H, {**cfg_c, "cover_stroke_w": 4, "cover_stroke_color": "#FF0000"})) - base_c).sum() > 1000)
+check("no shadow works", np.abs(arr(wallpaper.render_poster(
+    cover, meta, W, H, {**cfg_c, "cover_shadow_alpha": 0})) - base_c).sum() > 1000)
+
+# 暂停：压暗更暗 / 角标右下角出现 / 不暂停与基线一致
+paused_d = wallpaper.render_poster(cover, meta, W, H,
+                                   {**cfg_c, "pause_mode": "darken", "pause_darken": 40}, paused=True)
+check("pause darken", arr(paused_d).mean() < base_c.mean(),
+      f"{arr(paused_d).mean():.1f} vs {base_c.mean():.1f}")
+paused_b = wallpaper.render_poster(cover, meta, W, H, {**cfg_c, "pause_mode": "badge"}, paused=True)
+corner_b = arr(paused_b)[int(H * 0.9):, int(W * 0.85):]
+corner_0 = base_c[int(H * 0.9):, int(W * 0.85):]
+check("pause badge corner", np.abs(corner_b - corner_0).sum() > 5000,
+      f"diff={np.abs(corner_b - corner_0).sum():.0f}")
+check("no pause matches base", abs(arr(wallpaper.render_poster(
+    cover, meta, W, H, cfg_c, paused=False)).mean() - base_c.mean()) < 0.001)
+
+
+# LyricsWindow 离屏 smoke（创建→渲染→销毁，窗口立即隐藏）
+class FakeIpc:
+    def snapshot(self):
+        return {"position_ms": 0, "duration_ms": 200000, "connected": True,
+                "title": "t", "filename": None}
+
+
+root3 = tk.Tk()
+root3.withdraw()
+try:
+    lw = LyricsWindow(root3, FakeIpc(), config.load(), lambda: None)
+    lw.win.withdraw()
+    lw.set_lines([(0, "第一句"), (1500, "第二句")])
+    lw._render("第一句", "第二句")
+    check("lyrics window smoke", lw.H > 20 and lw._shown_pair == ("第一句", "第二句"),
+          f"H={lw.H} pair={ascii(lw._shown_pair)}")
+    lw.win.destroy()
+except Exception as e:  # 离屏环境可能拿不到 ULW，失败不掩盖其余结论
+    check("lyrics window smoke", False, repr(e)[:120])
+root3.destroy()
 
 print()
 print("RESULT:", "ALL_PASS" if not FAILS else f"FAILED={FAILS}")

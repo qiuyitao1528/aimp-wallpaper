@@ -15,6 +15,7 @@ from ctypes import wintypes
 
 from . import applog, config, wallpaper
 from .aimp_api import AimpIPC
+from .lyrics import LyricsFetcher, LyricsWindow
 from .tray import Tray
 from .vis_panel import VisPanel
 
@@ -44,10 +45,15 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
     last_cfg_mtime = None
     last_dark = None       # 日/夜主题跟随的基线（None=还没查过）
     dark_check_t = 0.0
+    last_paused = False    # 暂停显示的基线
 
     def render(cover, meta, why: str) -> bool:
         try:
-            paths = wallpaper.render_and_apply(cover, meta, cfg, wallpaper.get_monitors())
+            # 暂停反馈在渲染时实时判定（pause_mode 开且未在播放），所有渲染路径统一
+            paused = (cfg.get("pause_mode", "off") != "off"
+                      and ipc.snapshot().get("state") != 2)
+            paths = wallpaper.render_and_apply(cover, meta, cfg, wallpaper.get_monitors(),
+                                               paused=paused)
             applog.log(f"[{why}] 已更新 {len(paths)} 屏 "
                        f"字体: {cfg.get('title_font_file') or '默认'}/{cfg.get('sub_font_file') or '默认'}")
             return True
@@ -91,6 +97,14 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
             elif dark != last_dark and (last_cover is not None or last_meta is not None):
                 last_dark = dark
                 render(last_cover, last_meta, "主题切换")
+
+        # 暂停状态翻转：用当前曲目重渲染（pause_mode=off 时跳过）
+        if cfg.get("pause_mode", "off") != "off":
+            paused_now = ipc.snapshot().get("state") != 2  # 2=播放中，其余按暂停处理
+            flipped = paused_now != last_paused
+            last_paused = paused_now
+            if flipped and (last_cover is not None or last_meta is not None):
+                render(last_cover, last_meta, "暂停切换")
 
         gen = ipc.wait_track_change(timeout=0.5)
         if stop.is_set() or gen == last_gen or not ipc.snapshot()["connected"]:
@@ -203,6 +217,34 @@ def main():
         except Exception:
             applog.log_exc("启动建面板失败:\n", *sys.exc_info())
 
+    lyrics = {"obj": None, "fetcher": None}
+
+    def get_panel_pos():
+        p = panel["obj"]
+        if p is not None and not cfg.get("vis_hidden"):
+            try:
+                return p._screen_pos()
+            except Exception:
+                return None
+        return None
+
+    def on_lyrics_lines(lines):
+        lw = lyrics["obj"]
+        if lw is not None:
+            lw.set_lines(lines)
+
+    try:  # 歌词窗必须在频谱面板之后创建（seat_overlays 首登记者在最底）
+        lyrics["obj"] = LyricsWindow(root, ipc, cfg, get_panel_pos)
+        lyrics["fetcher"] = LyricsFetcher(ipc, cfg, on_lyrics_lines)
+        lyrics["fetcher"].start()
+    except Exception:
+        applog.log_exc("歌词窗创建失败:\n", *sys.exc_info())
+
+    def toggle_lyrics():
+        cfg["lyrics_hidden"] = not bool(cfg.get("lyrics_hidden"))
+        config.save(cfg)  # 歌词窗 _tick 自管理显隐
+        applog.log(f"歌词显隐切换: hidden={cfg['lyrics_hidden']}")
+
     def open_settings():
         from .settings_gui import SettingsWindow
         SettingsWindow(root, cfg)
@@ -250,7 +292,7 @@ def main():
 
     root.destroy = _quit_app  # 兜住小部件/面板右键的退出路径
     tray = Tray(root, on_settings=open_settings, on_toggle_vis=toggle_vis,
-                on_restore=restore_wp, on_quit=_quit_app)
+                on_toggle_lyrics=toggle_lyrics, on_restore=restore_wp, on_quit=_quit_app)
     atexit.register(lambda: tray.stop())  # 崩溃退出时兜底收托盘图标
     gc.freeze()  # 启动期对象移入永久代，进一步降低运行期 GC 成本
     applog.log("进入 mainloop")
