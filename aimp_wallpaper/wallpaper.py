@@ -508,11 +508,37 @@ def _ellipsis(draw, text, font, max_w):
     return (text + "…") if text else "…"
 
 
-def _wrap_title(draw, text, font, max_w, max_lines=2, space_window=0):
+_OPEN_BRACKETS = "（(「『【〔［｛{《〈"
+_CLOSE_BRACKETS = "）)』」】〕］｝}》〉"
+
+
+def _find_close(text: str, i: int, end: int) -> int:
+    """在 text[i:end) 里找第一个闭合括号，找不到返回 -1。"""
+    for k in range(i, min(end, len(text))):
+        if text[k] in _CLOSE_BRACKETS:
+            return k
+    return -1
+
+
+def _scan_open(seg: str, pos0: int, cur_open: int) -> int:
+    """吸收段 seg（原文从 pos0 起）后返回未闭合开括号位置（-1=无；嵌套不深究，闭合即清）。"""
+    for k, c in enumerate(seg):
+        if c in _OPEN_BRACKETS:
+            if cur_open < 0:
+                cur_open = pos0 + k
+        elif c in _CLOSE_BRACKETS:
+            cur_open = -1
+    return cur_open
+
+
+def _wrap_title(draw, text, font, max_w, max_lines=2, space_window=0, bracket_break=False):
     """超宽处理：max_lines>1 按像素宽度折行（末行放不下收省略号）；==1 直接省略号截断。
 
     space_window>0：折行点的剩余部分前 space_window 个字符内有空格时，
     断点移到该空格后（首行允许轻微超宽，避免把短词组切碎）。
+    bracket_break=True：断点落在括号组内部时——闭合括号就在跟前（space_window
+    个字符内）则吸收闭合括号、把组完整留在本行；否则整组挪到下一行（组从行首
+    就开始时退回普通断行）。
     """
     if max_lines <= 1:
         return [_ellipsis(draw, text, font, max_w)]
@@ -520,23 +546,46 @@ def _wrap_title(draw, text, font, max_w, max_lines=2, space_window=0):
         return [text]
     lines, cur = [], ""
     i, n = 0, len(text)
-    line_start = 0  # 当前正在累积的这一行在原文里的起点（末行收省略号要用）
+    line_start = 0   # 当前正在累积的这一行在原文里的起点（末行收省略号要用）
+    open_pos = -1    # 本行未闭合的开括号位置（-1=不在括号内）
     while i < n:
         ch = text[i]
         if cur and _text_len(draw, cur + ch, font) > max_w:
-            if space_window > 0:
+            moved = False
+            if bracket_break and open_pos >= 0:
+                close_j = _find_close(text, i, i + space_window) if space_window > 0 else -1
+                if close_j >= 0:
+                    seg = text[i:close_j + 1]  # 小尾巴吸收闭合括号，组完整留在本行
+                    cur += seg
+                    open_pos = _scan_open(seg, i, open_pos)
+                    i = close_j + 1
+                    moved = True
+                elif open_pos > line_start:
+                    cur = text[line_start:open_pos]  # 组整体挪到下一行
+                    i = open_pos
+                    moved = True
+                # open_pos == line_start（组占满整行）→ 退回普通断行
+            if not moved and space_window > 0:
                 j = text.find(" ", i, i + space_window)
-                if j >= 0:  # 首行吸收到空格（含空格），在空格后直接换行
-                    cur += text[i:j + 1]
+                if j >= 0:  # 吸收到空格（含空格），在空格后直接换行
+                    seg = text[i:j + 1]
+                    cur += seg
+                    open_pos = _scan_open(seg, i, open_pos)
                     i = j + 1
+                    moved = True
             lines.append(cur.rstrip())
             cur = ""
+            open_pos = -1
             if len(lines) == max_lines:  # 装不下：末行=剩余全部文本收省略号
                 lines[-1] = _ellipsis(draw, text[line_start:].rstrip(), font, max_w)
                 break
+            while i < n and text[i] == " ":  # 断行后跳过前导空格（居中/右对齐会偏移）
+                i += 1
             line_start = i
         else:
             cur += ch
+            if bracket_break:
+                open_pos = _scan_open(ch, i, open_pos)
             i += 1
     if cur and len(lines) < max_lines:
         lines.append(cur)
@@ -643,7 +692,6 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
         if tw_max > h * 0.15:
             layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             draw = ImageDraw.Draw(layer)
-            space_window = max(0, min(20, int(cfg.get("wrap_space_window", 0) or 0)))
             texts = {
                 "title": meta.get("title") or "未知曲目",
                 "artist": meta.get("artist") or "未知艺术家",
@@ -665,7 +713,10 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                     sw = 1
                 overflow = cfg.get(f"{g}_overflow", "wrap" if g == "title" else "ellipsis")
                 if overflow == "wrap":  # 折行每条最多 2 行，末行省略号
-                    lines = _wrap_title(draw, text, font, tw_max, 2, space_window)
+                    lines = _wrap_title(
+                        draw, text, font, tw_max, 2,
+                        max(0, min(20, int(cfg.get(f"{g}_space_window", 0) or 0))),
+                        bool(cfg.get(f"{g}_bracket_break", True)))
                 else:
                     lines = [_ellipsis(draw, text, font, tw_max)]
                 blocks.append((g, lines, font, _hex_rgb(cfg.get(f"{g}_color"), (255, 255, 255)),

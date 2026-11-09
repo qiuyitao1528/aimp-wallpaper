@@ -178,14 +178,15 @@ class SettingsWindow:
             v["color"] = self._color_row(add, pg, f"{zh}颜色", f"{key}_color", "#FFFFFF")
             v["of"] = labeled(pg, f"{zh}过长", OVERFLOW_ITEMS,
                               cfg.get(f"{key}_overflow", "wrap" if key == "title" else "ellipsis"))
+            v["space_w"] = labeled(pg, f"{zh}空格断行(字符)", SPACE_WRAP_ITEMS,
+                                   str(int(cfg.get(f"{key}_space_window", 5) or 0)))
+            v["bracket"] = check(pg, f"{zh}括号断行", cfg.get(f"{key}_bracket_break", True))
             v["bold"] = check(pg, f"{zh}加粗", cfg.get(f"{key}_bold", key == "title"))
             v["shadow"] = check(pg, f"{zh}阴影", cfg.get(f"{key}_shadow", True))
             v["stroke_w"] = combo(pg, f"{zh}描边宽(像素)", STROKE_CHOICES,
                                   int(cfg.get(f"{key}_stroke_w", 0) or 0))
             v["stroke_color"] = self._color_row(add, pg, f"{zh}描边色", f"{key}_stroke_color", "#000000")
             self._line_vars[key] = v
-        self.space_wrap_var = labeled(pg, "空格断行(字符)", SPACE_WRAP_ITEMS,
-                                      str(int(cfg.get("wrap_space_window", 5) or 0)))
 
         # ---------------- 排版 ----------------
         pg = self._pages["排版"]
@@ -268,8 +269,9 @@ class SettingsWindow:
             self.cfg[f"{key}_shadow"] = v["shadow"].get()
             self.cfg[f"{key}_overflow"] = dict(OVERFLOW_ITEMS).get(v["of"].get(),
                                                                    "wrap" if key == "title" else "ellipsis")
+            self.cfg[f"{key}_space_window"] = int(dict(SPACE_WRAP_ITEMS).get(v["space_w"].get(), "5"))
+            self.cfg[f"{key}_bracket_break"] = v["bracket"].get()
             self.cfg[f"{key}_stroke_color"] = v["stroke_color"].get()
-        self.cfg["wrap_space_window"] = int(dict(SPACE_WRAP_ITEMS).get(self.space_wrap_var.get(), "5"))
         self._int(self.tsg_var, "title_sub_gap_ratio", 0, 300, ratio=True)
         self._int(self.tlg_var, "title_line_gap_ratio", 0, 300, ratio=True)
         self._int(self.slg_var, "sub_line_gap_ratio", 0, 300, ratio=True)

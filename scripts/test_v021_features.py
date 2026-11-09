@@ -34,7 +34,8 @@ old_cfg_path = os.path.join(tmp, "old", "config.json")
 os.makedirs(os.path.dirname(old_cfg_path), exist_ok=True)
 with open(old_cfg_path, "w", encoding="utf-8") as f:
     json.dump({"text_shadow": False, "sub_font_file": "simhei.ttf", "sub_bold": True,
-               "sub_color": "#FF0000", "sub_overflow": "wrap", "sub_size_ratio": 0.03}, f)
+               "sub_color": "#FF0000", "sub_overflow": "wrap", "sub_size_ratio": 0.03,
+               "wrap_space_window": 3}, f)
 config.CONFIG_PATH, _saved_path = old_cfg_path, config.CONFIG_PATH
 cfg = config.load()
 check("migrate artist_size", cfg["artist_size_ratio"] == 0.03)
@@ -44,14 +45,17 @@ check("migrate colors", cfg["artist_color"] == "#FF0000" and cfg["album_color"] 
 check("migrate overflow", cfg["artist_overflow"] == "wrap" and cfg["album_overflow"] == "wrap")
 check("migrate shadows off", cfg["title_shadow"] is False and cfg["artist_shadow"] is False
       and cfg["album_shadow"] is False)
+check("migrate wrap windows", cfg["title_space_window"] == 3 and cfg["artist_space_window"] == 3
+      and cfg["album_space_window"] == 3)
 
 new_cfg_path = os.path.join(tmp, "new", "config.json")
 os.makedirs(os.path.dirname(new_cfg_path), exist_ok=True)
 with open(new_cfg_path, "w", encoding="utf-8") as f:
-    json.dump({"artist_size_ratio": 0.09, "text_shadow": False}, f)
+    json.dump({"artist_size_ratio": 0.09, "text_shadow": False, "wrap_space_window": 7}, f)
 config.CONFIG_PATH = new_cfg_path
 cfg = config.load()
 check("new cfg untouched", cfg["artist_size_ratio"] == 0.09)
+check("v024 cfg wrap seeded", cfg["title_space_window"] == 7 and cfg["album_space_window"] == 7)
 config.CONFIG_PATH = _saved_path
 
 # ---------- B. 空格断行 ----------
@@ -75,6 +79,24 @@ lines_none = wallpaper._wrap_title(draw, "aaaaXXbbXXcc", font, max_w, 2, space_w
 check("wrap no-space fallback", len(lines_none) == 2, ascii(lines_none))
 # 短文本不折行
 check("wrap fits", wallpaper._wrap_title(draw, "hi", font, 10_000, 2, 5) == ["hi"])
+# 括号断行：关=普通断行（行尾孤括号）/ 开=闭合括号贴近则吸收 / 组离行首远则整组下移
+text_b = "aaaa (bb) cc"
+wb1 = wallpaper._text_len(draw, "aaaa (bb", font)
+wb2 = wallpaper._text_len(draw, "aaaa (bb)", font)
+max_b = (wb1 + wb2) / 2  # 让自然断点恰好落在 ")" 之前
+lb0 = wallpaper._wrap_title(draw, text_b, font, max_b, 2, space_window=0)
+lb1 = wallpaper._wrap_title(draw, text_b, font, max_b, 2, space_window=0, bracket_break=True)
+lb2 = wallpaper._wrap_title(draw, text_b, font, max_b, 2, space_window=2, bracket_break=True)
+print("bracket off:", ascii(lb0), "| move:", ascii(lb1), "| absorb:", ascii(lb2))
+check("bracket off normal", lb0[1].startswith(")"), ascii(lb0))
+check("bracket move group", lb1[0] == "aaaa" and lb1[1].startswith("(bb"), ascii(lb1))
+check("bracket absorb close", lb2[0] == "aaaa (bb)" and lb2[1] == "cc", ascii(lb2))
+text_g = "aa (bbbbbbbb) cc"
+wg1 = wallpaper._text_len(draw, "aa (b", font)
+wg2 = wallpaper._text_len(draw, "aa (bb", font)
+lg = wallpaper._wrap_title(draw, text_g, font, (wg1 + wg2) / 2, 2, space_window=2, bracket_break=True)
+print("bracket group move:", ascii(lg))
+check("bracket group to next line", lg[0] == "aa" and lg[1].startswith("("), ascii(lg))
 
 # ---------- C. 渲染：四种背景方案 + 夜间遮罩 ----------
 rng = np.random.default_rng(7)
@@ -192,10 +214,13 @@ check("gui line groups", n_labels == 3, f"groups={list(win._line_vars)}")
 win._line_vars["title"]["stroke_w"].set("3")
 win._line_vars["title"]["shadow"].set(False)
 win._line_vars["album"]["font"].set("黑体")
+win._line_vars["title"]["space_w"].set("8")
+win._line_vars["artist"]["space_w"].set("关")
+win._line_vars["title"]["bracket"].set(False)
+win._line_vars["artist"]["bracket"].set(False)
 win.bg_style_var.set("模糊+暗角")
 win.night_var.set(True)
 win.night_alpha_var.set("70")
-win.space_wrap_var.set("8")
 win._save()
 root.destroy()
 with open(config.CONFIG_PATH, encoding="utf-8") as f:
@@ -207,7 +232,12 @@ check("gui save shadow", saved.get("title_shadow") is False and saved.get("album
 expected_font = win._label_to_file.get("黑体")
 check("gui save album font", saved.get("album_font_file") == expected_font,
       f"saved={ascii(saved.get('album_font_file'))} expected={ascii(expected_font)}")
-check("gui save space wrap", saved.get("wrap_space_window") == 8)
+check("gui save wrap per line", saved.get("title_space_window") == 8
+      and saved.get("artist_space_window") == 0 and saved.get("album_space_window") == 5,
+      f"{saved.get('title_space_window')}/{saved.get('artist_space_window')}/{saved.get('album_space_window')}")
+check("gui save bracket per line", saved.get("title_bracket_break") is False
+      and saved.get("artist_bracket_break") is False and saved.get("album_bracket_break") is True,
+      f"{saved.get('title_bracket_break')}/{saved.get('artist_bracket_break')}/{saved.get('album_bracket_break')}")
 check("gui save ratio", abs(saved.get("artist_size_ratio", 0) - gui_cfg["artist_size_ratio"]) < 1e-6)
 
 print()

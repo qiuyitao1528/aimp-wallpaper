@@ -73,7 +73,13 @@ DEFAULTS = {
     "artist_overflow": "ellipsis",  # 歌手过长
     "album_overflow": "ellipsis",   # 专辑过长
     "sub_overflow": "ellipsis",     # （旧版）副行过长，迁移源
-    "wrap_space_window": 5,     # 空格断行：折行点剩余部分前 N 字符内有空格则断在空格后（0=关）
+    "wrap_space_window": 5,     # （旧版）全局空格断行，迁移源
+    "title_space_window": 5,    # 歌名空格断行窗口（折行点剩余部分前 N 字符内有空格则断在空格后，0=关）
+    "artist_space_window": 5,   # 歌手空格断行窗口
+    "album_space_window": 5,    # 专辑空格断行窗口
+    "title_bracket_break": True,    # 歌名括号断行：断点落在括号组内时吸收闭合括号或整组下移
+    "artist_bracket_break": True,   # 歌手括号断行
+    "album_bracket_break": True,    # 专辑括号断行
     "show_text": True,
     "text_offset_x": 0,         # 文字区 X 偏移(像素)
     "text_offset_y": 0,         # 文字区 Y 偏移(像素)
@@ -105,12 +111,17 @@ _MIGRATE_FROM_SUB = [
 
 
 def _migrate(cfg: dict, data: dict) -> None:
-    if "artist_size_ratio" in data:
-        return  # 已是新版配置
     for new, old in _MIGRATE_FROM_SUB:
-        cfg[new] = cfg.get(old)
-    for k in ("title_shadow", "artist_shadow", "album_shadow"):
-        cfg[k] = bool(cfg.get("text_shadow", True))
+        if new not in data:
+            cfg[new] = cfg.get(old)
+    # v0.2.4 及更早：全局 wrap_space_window → 每行 space_window
+    for g in ("title", "artist", "album"):
+        if f"{g}_space_window" not in data:
+            cfg[f"{g}_space_window"] = cfg.get("wrap_space_window",
+                                               DEFAULTS["wrap_space_window"])
+    if "artist_size_ratio" not in data:  # 旧版格式才从 text_shadow 播种三行阴影
+        for k in ("title_shadow", "artist_shadow", "album_shadow"):
+            cfg[k] = bool(cfg.get("text_shadow", True))
 
 
 def load() -> dict:
