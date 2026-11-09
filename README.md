@@ -1,68 +1,174 @@
-# AIMP Wallpaper
+<div align="center">
 
-桌面壁纸跟随 [AIMP](https://www.aimp.ru/) 当前播放歌曲实时变化：专辑封面海报式壁纸（封面 1:1 清晰居左、右侧歌名/歌手/专辑、背景为封面高斯模糊），附带 AIMP 经典样式频谱面板与系统托盘。
+# 🎵 AIMP Wallpaper
 
-![screenshot](docs/screenshot.png)
+**让桌面壁纸跟着 AIMP 里正在播放的歌一起变**
 
-## 功能
+专辑封面海报式动态壁纸 · AIMP 经典频谱面板 · 系统托盘
 
-- **海报式动态壁纸**：随播放自动更新；封面原尺寸不放大、超屏才等比缩小；多显示器逐屏渲染
-- **频谱面板**：AIMP 经典样式（白条 + 点状峰值帽），WASAPI 环回自算 FFT（4096 点、线性频率轴，与 AIMP 官方实现一致），可拖动/锁定/隐藏
-- **系统托盘**：设置、显示/隐藏频谱面板、恢复原壁纸、退出
-- **丰富的壁纸排版设置**（设置窗口分「壁纸 / 文字 / 排版 / 面板 / 系统」五页）：
-  - 壁纸：背景模糊半径、封面大小倍率（0.5~1.6）、封面 X/Y 偏移
-  - 文字：歌名与副行各自的字号、字体（枚举系统全部字体）、颜色、加粗、过长处理（换行/省略号）；文字阴影
-  - 排版：标题-副行间距、标题行间距、副行行间距、文字 X/Y 偏移、文字水平对齐（左/中/右）、垂直对齐（顶/中/底）
-- **渲染**：UpdateLayeredWindow 逐像素 alpha 原子呈现，无闪烁；刷新率 10~120fps 可调
-- **其他**：配置热重载（保存立即生效）、单实例、首次运行自动记录原壁纸（`restore` 子命令或卸载时自动恢复）、运行日志
+[![Release](https://img.shields.io/github/v/release/qiuyitao1528/aimp-wallpaper?style=flat-square&color=4C8BF5)](https://github.com/qiuyitao1528/aimp-wallpaper/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows)](https://github.com/qiuyitao1528/aimp-wallpaper)
+[![License](https://img.shields.io/github/license/qiuyitao1528/aimp-wallpaper?style=flat-square&color=3DA639)](LICENSE)
+[![AIMP](https://img.shields.io/badge/AIMP-v5.40%20tested-FF6B35?style=flat-square)](https://www.aimp.ru/)
 
-## 安装
+[下载](#-下载安装) · [功能](#-功能) · [设置](#-可调项) · [常见问题](#-常见问题) · [从源码构建](#-从源码构建)
 
-从 [Releases](../../releases) 下载：
+</div>
 
-- `aimp-wallpaper-vX.Y.Z-setup.exe`：安装版（per-user 免管理员，含开始菜单/自启/卸载）
-- `aimp-wallpaper-vX.Y.Z-win64.zip`：绿色版，解压即用（配置生成在 exe 旁）
+---
 
-系统要求：Windows 10 / 11，[AIMP](https://www.aimp.ru/)（v5.40 实测，需其 Remote API）。
+<div align="center">
+<img src="docs/screenshot.png" width="880" alt="AIMP Wallpaper 效果">
+</div>
 
-## 使用
+---
 
-- 托盘图标右键：设置 / 显示-隐藏频谱面板 / 恢复原壁纸 / 退出
-- 频谱面板右键：拖动定位、锁定（禁拖动，仍跟随壁纸锚点）、隐藏、退出
-- 退出默认恢复原壁纸（设置里可关）；`aimp-wallpaper.exe restore` 可手动恢复
+## ✨ 功能
 
-## 从源码运行 / 构建
+| | 功能 | 说明 |
+|---|---|---|
+| 🖼️ | **海报式动态壁纸** | 切歌即换：封面 1:1 清晰居左、右侧歌名/歌手/专辑，背景为封面高斯模糊。封面不放大不裁剪，超屏才等比缩小 |
+| 📊 | **AIMP 经典频谱面板** | 白条 + 点状峰值帽，与 AIMP 官方可视化同款（线性频率轴、WASAPI 环回自算 FFT）。可拖动、可锁定、可隐藏，无处可声时整列隐藏 |
+| 🎨 | **排版全可调** | 封面大小与位置、文字字号/字体/颜色/加粗/阴影/行距、水平与垂直对齐——详见下方[可调项](#-可调项) |
+| 🖥️ | **多显示器** | 逐屏按物理分辨率渲染；合盖断开的显示器自动跳过，不会拖垮整次渲染 |
+| ⚡ | **低占用** | 频谱用 `UpdateLayeredWindow` 逐像素 alpha 原子呈现（Rainmeter / Lively 同思路），约 6~8% CPU；刷新率 10~120fps 可调 |
+| 🔔 | **系统托盘** | 设置、显示/隐藏面板、恢复原壁纸、退出 |
+| 💾 | **不弄脏桌面** | 首次运行自动记录原壁纸，退出时（可关）或卸载时自动恢复 |
+
+---
+
+## 📥 下载安装
+
+前往 [**Releases**](https://github.com/qiuyitao1528/aimp-wallpaper/releases/latest) 下载，二选一：
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🔧 安装版
+`aimp-wallpaper-vX.Y.Z-setup.exe`
+
+- 免管理员（装到当前用户）
+- 自带开始菜单快捷方式
+- 可选开机自启
+- 可在「添加或删除程序」里卸载
+
+</td>
+<td width="50%" valign="top">
+
+### 🟢 绿色版
+`aimp-wallpaper-vX.Y.Z-win64.zip`
+
+- 解压即用，不写注册表
+- 配置生成在 exe 旁边
+- 适合放 U 盘 / 便携使用
+
+</td>
+</tr>
+</table>
+
+> **环境要求**：Windows 10 / 11（64 位）+ [AIMP](https://www.aimp.ru/)（v5.40 实测；利用其自带的 Remote API，**无需装任何插件**）
+
+---
+
+## 🚀 使用
+
+1. 启动 `AIMP Wallpaper`（首次运行会记录你当前的原壁纸）
+2. 打开 AIMP 随便放首歌 —— 壁纸立刻变成海报
+3. 右下角出现频谱面板；托盘出现图标
+
+**托盘右键菜单**：设置… / 显示·隐藏频谱面板 / 恢复原壁纸 / 退出
+**频谱面板右键**：锁定（禁拖动，仍跟随壁纸）/ 跟随壁纸位置 / 隐藏 / 退出
+
+> 退出程序时默认把壁纸恢复成你原来的那张（可在设置 → 系统里关掉）。
+> 也可以随时手动恢复：`aimp-wallpaper.exe restore`
+
+---
+
+## ⚙️ 可调项
+
+设置窗口分五页，全部即改即生效（保存后壁纸立刻重渲染，不用重启）：
+
+| 页签 | 内容 |
+|---|---|
+| **壁纸** | 背景模糊半径、封面大小倍率（0.5~1.6）、封面 X 偏移、封面 Y 偏移 |
+| **文字** | 歌名与副行**各自独立**：字号（像素）、字体（自动枚举系统全部字体）、颜色（取色器）、加粗、过长处理（换行 / 省略号）；文字阴影 |
+| **排版** | 标题-副行间距、标题行间距、副行行间距、文字 X 偏移、文字 Y 偏移、水平对齐（左/中/右）、垂直对齐（顶/中/底） |
+| **面板** | 频率面板刷新率（15~120fps）、锁定 |
+| **系统** | 开机自启、退出时恢复原壁纸 |
+
+> 偏移量可以直接键入数值（支持负数）。频谱面板的自动位置跟着文字块底部走，调排版时会一起挪。
+
+---
+
+## ❓ 常见问题
+
+<details>
+<summary><b>壁纸不跟着歌变？</b></summary>
+
+先看日志：`%LOCALAPPDATA%\aimp-wallpaper\aimp-wallpaper.log`
+
+最常见的两个原因：
+- **AIMP 没在运行**：程序会每 5 秒重连，AIMP 起来后自动恢复
+- **有显示器处于断开状态**（例如笔记本合盖外接屏）：已修复；若仍遇到，把日志发到 Issue 里
+</details>
+
+<details>
+<summary><b>频谱面板不动 / 是空的？</b></summary>
+面板数据来自系统声音的 WASAPI 环回采集。没有任何声音输出时，所有条会整列隐藏（这是正常表现）。如果一直空白，检查系统是否有可用的输出设备。
+</details>
+
+<details>
+<summary><b>在线电台没有封面 / 没有歌词？</b></summary>
+在线流常常不带封面，此时会显示深色占位框（正常）。
+</details>
+
+<details>
+<summary><b>开机自启在哪里开关？</b></summary>
+设置 → 系统 → 开机自启动。它与安装时勾选的"开机自启动"是同一个启动项。
+</details>
+
+---
+
+## 🔨 从源码构建
 
 ```bash
-# 运行（uv 管理，Python 3.12+）
+# 运行（需要 Python 3.12+ 与 uv）
 uv run python -m aimp_wallpaper          # 启动
 uv run python -m aimp_wallpaper restore  # 恢复原壁纸
 
-# 打包 exe（PyInstaller）
+# 打包 exe
 uv run pyinstaller --noconfirm --clean --windowed --name aimp-wallpaper \
   --icon assets/icon.ico --add-data "assets/icon.png;." \
   --collect-all pyaudiowpatch --collect-all pystray run.py
 
-# 安装包（Inno Setup 6+）
+# 生成安装包（需要 Inno Setup 6+）
 iscc installer.iss
 ```
 
-## 原理
+---
 
-- **数据源**：AIMP 自带 Remote API（`AIMP2_RemoteInfo` 窗口消息 + 共享内存 + WM_COPYDATA 封面推送），零插件依赖。常量已按 AIMP v5.40.2727 实测校准（`scripts/probe_aimp.py`）
-- **封面**：`GET_ALBUMART(29)` → AIMP 回推 WM_COPYDATA（dwData=`0x41495043`，图片字节流）。切歌后 10s 重试窗口内重试（切歌瞬间 AIMP 可能还没解析好封面）
-- **元数据**：共享内存 2048 字节，`0x00`=字符串区偏移(0x58)、`0x28` 起依次 Album/Artist/Date/FileName/Genre/Title 字符长度，`0x58` 起紧凑 UTF-16
-- **频谱**：AIMP 官方可视化即线性频率轴直出 FFT bin（见 `apiVisuals.h`），本面板对齐该实现；采集走 WASAPI 环回（pyaudiowpatch），帧间做时间线性插值
-- **渲染**：PIL 海报式渲染，PNG 输出；模糊背景 1/3 尺寸降采样加速；封面/背景按内容哈希缓存
-- **覆盖窗口**：Win11 26300 上 `SetParent` 进 Progman/WorkerW 的窗口不被 DWM 合成，改用**顶层窗口 + `UpdateLayeredWindow` 逐像素 alpha 原子呈现 + `SetWindowPos` 把 Progman 压到窗口下方**（Rainmeter/Lively 同思路）
-- **设壁纸**：comtypes 手写 `IDesktopWallpaper`（IID `B92B56A9-8B55-4E14-9A89-0199BBB6F93B`——网上常见 IID 有误），逐屏 SetWallpaper
+## 🔍 原理
 
-## 已知限制
+<details>
+<summary><b>展开技术细节</b></summary>
 
-- 在线电台曲目可能无封面 → 显示深色占位图（正常行为）
-- AIMP 未运行时壁纸保持不变，IPC 每 5s 重连
-- 静默安装（/VERYSILENT）时若壁纸正在运行需先关闭（GUI 安装会自动提示）
+- **数据源**：AIMP 自带 Remote API（`AIMP2_RemoteInfo` 窗口消息 + 共享内存 + `WM_COPYDATA` 封面推送），零插件依赖。协议常量按本机 AIMP v5.40.2727 实测校准
+- **封面**：`GET_ALBUMART(29)` → AIMP 回推 `WM_COPYDATA`（`dwData=0x41495043`，图片字节流）。切歌瞬间 AIMP 常未解析好封面，故带 10 秒重试窗口
+- **元数据**：共享内存 2048 字节，`0x00`=字符串区偏移(0x58)，`0x28` 起依次 Album/Artist/Date/FileName/Genre/Title 字符长度，`0x58` 起紧凑 UTF-16
+- **频谱**：AIMP 官方可视化本身就是线性频率轴直出 FFT bin（见其 `apiVisuals.h`），本项目对齐该实现；采集走 WASAPI 环回（pyaudiowpatch），帧间做时间线性插值
+- **渲染**：PIL 逐屏渲染，PNG 输出；模糊背景先降采样到 1/3 再模糊回放大（约 10 倍提速）；封面与背景按内容哈希缓存
+- **覆盖窗口**：Win11 26300 上 `SetParent` 进 Progman/WorkerW 的窗口不会被 DWM 合成，因此改用**顶层窗口 + `UpdateLayeredWindow` 逐像素 alpha + `SetWindowPos` 把 Progman 压到窗口下方**（Rainmeter / Lively 同思路）
+- **设壁纸**：comtypes 手写 `IDesktopWallpaper`（IID `B92B56A9-8B55-4E14-9A89-0199BBB6F93B` —— 网上常见 IID 有误），逐屏 `SetWallpaper`
 
-## License
+</details>
 
-[MIT](LICENSE)
+---
+
+<div align="center">
+
+**License** · [MIT](LICENSE)
+
+如果它让你的桌面好看了一点，欢迎点个 ⭐
+
+</div>
