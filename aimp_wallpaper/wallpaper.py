@@ -272,8 +272,9 @@ def _night_alpha(cfg: dict) -> int:
 def _apply_blur_type(base: Image.Image, cfg: dict) -> Image.Image:
     """模糊类型分发（blur/blur_vignette 方案下生效，都在 1/4 小图上算）：
 
-    gauss=高斯（默认）/ box=方框（硬边复古感）/ motion=水平运动拖影 /
-    zoom=缩放放射（zoom-burst）/ pixel=像素化（马赛克）。
+    gauss=高斯（默认）/ box=方框 / motion=水平运动拖影 / zoom=缩放放射 / pixel=像素化 /
+    median=中值（绘画感，去细节保色块）/ glass=毛玻璃（随机扭曲）/ dof=景深（中心清晰四周糊）/
+    spin=旋转（径向拖影）。
     """
     r = max(4, int(cfg.get("blur_radius", 28) or 28))
     t = cfg.get("blur_type", "gauss")
@@ -307,6 +308,48 @@ def _apply_blur_type(base: Image.Image, cfg: dict) -> Image.Image:
         sw, sh = base.size
         k = max(3, r // 3)
         return base.resize((max(2, sw // k), max(2, sh // k)), Image.BOX).resize((sw, sh), Image.NEAREST)
+    if t == "median":
+        k = min(9, max(3, (r // 6) | 1))  # 中值窗口（奇数），大窗口很慢故封顶 9
+        return base.filter(ImageFilter.MedianFilter(size=k))
+    if t == "glass":
+        # 毛玻璃：平滑随机场做位移扭曲（固定种子→纹理稳定，重渲染不闪变），再轻高斯柔化
+        sw, sh = base.size
+        mag = max(2, r // 6)
+        rng = np.random.default_rng(7)
+        fs = 16  # 随机场降采样倍率：小场放大=平滑扰动
+        fw, fh = max(2, sw // fs), max(2, sh // fs)
+
+        def field():
+            f = rng.uniform(0, 255, size=(fh, fw)).astype(np.uint8)
+            return (np.asarray(Image.fromarray(f, "L").resize((sw, sh), Image.BILINEAR),
+                               dtype=np.float64) / 127.5 - 1.0)
+
+        dx = (field() * mag).round().astype(np.int32)
+        dy = (field() * mag).round().astype(np.int32)
+        ys = np.clip(np.arange(sh)[:, None] + dy, 0, sh - 1)
+        xs = np.clip(np.arange(sw)[None, :] + dx, 0, sw - 1)
+        out = np.asarray(base, dtype=np.uint8)[ys, xs]
+        return Image.fromarray(out).filter(ImageFilter.GaussianBlur(radius=max(1.0, r / 16.0)))
+    if t == "dof":
+        # 景深/移轴：中心保持清晰、四周渐入模糊（composite 的 mask 255=取第一张图，故中心应为 255）
+        blurred = base.filter(ImageFilter.GaussianBlur(radius=r / 4.0))
+        sw, sh = base.size
+        yy, xx = np.mgrid[0:sh, 0:sw]
+        dist = np.sqrt(((xx - sw / 2) / (sw / 2)) ** 2 + ((yy - sh / 2) / (sh / 2)) ** 2)
+        alpha = np.clip((dist - 0.35) / 0.45, 0.0, 1.0)  # 中心 0 → 边缘 1
+        mask = Image.fromarray(((1.0 - alpha) * 255).astype(np.uint8), "L")  # 中心 255=清晰
+        return Image.composite(base, blurred, mask)
+    if t == "spin":
+        # 旋转径向拖影：N 步绕中心旋转取平均
+        sw, sh = base.size
+        steps = 6
+        maxang = min(20.0, 4.0 + r / 8.0)
+        acc = np.asarray(base, dtype=np.float64)
+        for i in range(1, steps):
+            ang = maxang * i / (steps - 1)
+            acc += np.asarray(base.rotate(ang, resample=Image.BILINEAR, center=(sw / 2, sh / 2)),
+                              dtype=np.float64)
+        return Image.fromarray((acc / steps).astype(np.uint8))
     return base.filter(ImageFilter.GaussianBlur(radius=r / 4.0))
 
 

@@ -253,16 +253,20 @@ sg.autostart_enabled = None
 
 print()
 
-# ---------- G. 模糊类型：gauss/box/motion/zoom/pixel ----------
+# ---------- G. 模糊类型：gauss/box/motion/zoom/pixel/median/glass/dof/spin ----------
+BLUR_TYPES = ("gauss", "box", "motion", "zoom", "pixel", "median", "glass", "dof", "spin")
 blurs = {}
-for t in ("gauss", "box", "motion", "zoom", "pixel"):
+for t in BLUR_TYPES:
     c = dict(config.DEFAULTS)
     c.update(bg_style="blur", blur_type=t, blur_radius=60, darken=0.75, theme_night_follow=False)
+    t0 = time.monotonic()
     b = wallpaper._blur_bg(cover_img, W, H, c)
+    ms = (time.monotonic() - t0) * 1000
     ab = arr(b)
     blurs[t] = ab
-    check(f"blur_type {t} ok", b.size == (W, H), f"mean={ab.mean():.1f}")
-for t in ("box", "motion", "zoom", "pixel"):
+    check(f"blur_type {t} ok", b.size == (W, H), f"mean={ab.mean():.1f} {ms:.0f}ms")
+    check(f"blur_type {t} fast", ms < 800, f"{ms:.0f}ms")
+for t in ("box", "motion", "zoom", "pixel", "median", "glass", "dof", "spin"):
     d = float(np.abs(blurs[t] - blurs["gauss"]).mean())
     check(f"blur_type {t} differs from gauss", d > 0.2, f"meandiff={d:.2f}")
 # 像素化应有块状结构（块内几乎零差异）
@@ -270,8 +274,22 @@ px = blurs["pixel"]
 inner = px[100:164, 100:164]
 check("pixel blocky", float(np.abs(np.diff(inner, axis=0)).mean()) < 1.0,
       f"inner hf={float(np.abs(np.diff(inner, axis=0)).mean()):.3f}")
+# 玻璃：固定种子 → 两次渲染结果逐像素一致
+cg = dict(config.DEFAULTS); cg.update(bg_style="blur", blur_type="glass", blur_radius=60,
+                                      darken=0.75, theme_night_follow=False)
+g1 = arr(wallpaper._blur_bg(cover_img, W, H, cg))
+g2 = arr(wallpaper._blur_bg(cover_img, W, H, cg))
+check("glass deterministic", float(np.abs(g1 - g2).max()) == 0.0)
+# 景深：中心比角落更"有细节"（高频能量更高）
+cd = dict(config.DEFAULTS); cd.update(bg_style="blur", blur_type="dof", blur_radius=60,
+                                      darken=0.75, theme_night_follow=False)
+dof = arr(wallpaper._blur_bg(cover_img, W, H, cd))
+cen = dof[H // 2 - 100:H // 2 + 100, W // 2 - 100:W // 2 + 100]
+cor = dof[0:200, 0:200]
+hf_c = float(np.abs(np.diff(cen, axis=0)).mean())
+hf_e = float(np.abs(np.diff(cor, axis=0)).mean())
+check("dof center sharper", hf_c > hf_e * 1.2, f"center={hf_c:.2f} corner={hf_e:.2f}")
 # 缓存键区分类型
-k1 = wallpaper._get_bg.__doc__  # noqa: F841 仅为命名空间提示
 wallpaper._BG_CACHE.clear()
 c1 = dict(config.DEFAULTS); c1.update(bg_style="blur", blur_type="gauss", blur_radius=60,
                                       darken=0.75, theme_night_follow=False)
