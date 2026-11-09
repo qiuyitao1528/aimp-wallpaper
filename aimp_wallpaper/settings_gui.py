@@ -1,4 +1,4 @@
-"""设置窗口：壁纸 / 文字 / 排版 / 面板 / 系统 五个标签页。"""
+"""设置窗口：壁纸 / 歌名 / 歌手 / 专辑 / 排版 / 面板 / 系统 七个标签页。"""
 from __future__ import annotations
 
 import os
@@ -111,7 +111,8 @@ class SettingsWindow:
         nb = ttk.Notebook(self.win)
         nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         self._pages, self._rows = {}, {}
-        for name in ("壁纸", "文字", "排版", "面板", "系统"):
+        # 歌名/歌手/专辑各自一页：单页行数太多会把窗口撑得太长
+        for name in ("壁纸", "歌名", "歌手", "专辑", "排版", "面板", "系统"):
             f = ttk.Frame(nb, padding=10)
             nb.add(f, text=name)
             self._pages[name] = f
@@ -179,28 +180,28 @@ class SettingsWindow:
         self.cover_dy_var = combo(pg, "封面 Y 偏移(像素)", OFFSET_CHOICES,
                                   int(cfg.get("cover_offset_y", 0) or 0))
 
-        # ---------------- 文字（歌名/歌手/专辑三行各自独立样式） ----------------
-        pg = self._pages["文字"]
+        # ---------------- 歌名/歌手/专辑（各自一页，标签不再重复行名） ----------------
         self._line_vars = {}
         for key, zh in LINE_ITEMS:
+            pg = self._pages[zh]
             v = {}
-            v["size"] = combo(pg, f"{zh}字号(像素)", SIZE_CHOICES,
+            v["size"] = combo(pg, "字号(像素)", SIZE_CHOICES,
                               px_of(f"{key}_size_ratio", 0.075 if key == "title" else 0.042))
-            v["font"] = combo(pg, f"{zh}字体",
+            v["font"] = combo(pg, "字体",
                               [self._default_label] + [lb for lb, _ in self._fonts],
                               self._file_to_label.get(cfg.get(f"{key}_font_file"), self._default_label),
                               width=28)
-            v["color"] = self._color_row(add, pg, f"{zh}颜色", f"{key}_color", "#FFFFFF")
-            v["of"] = labeled(pg, f"{zh}过长", OVERFLOW_ITEMS,
+            v["color"] = self._color_row(add, pg, "颜色", f"{key}_color", "#FFFFFF")
+            v["of"] = labeled(pg, "过长", OVERFLOW_ITEMS,
                               cfg.get(f"{key}_overflow", "wrap" if key == "title" else "ellipsis"))
-            v["space_w"] = labeled(pg, f"{zh}空格断行(字符)", SPACE_WRAP_ITEMS,
+            v["space_w"] = labeled(pg, "空格断行(字符)", SPACE_WRAP_ITEMS,
                                    str(int(cfg.get(f"{key}_space_window", 5) or 0)))
-            v["bracket"] = check(pg, f"{zh}括号断行", cfg.get(f"{key}_bracket_break", True))
-            v["bold"] = check(pg, f"{zh}加粗", cfg.get(f"{key}_bold", key == "title"))
-            v["shadow"] = check(pg, f"{zh}阴影", cfg.get(f"{key}_shadow", True))
-            v["stroke_w"] = combo(pg, f"{zh}描边宽(像素)", STROKE_CHOICES,
+            v["bracket"] = check(pg, "括号断行", cfg.get(f"{key}_bracket_break", True))
+            v["bold"] = check(pg, "加粗", cfg.get(f"{key}_bold", key == "title"))
+            v["shadow"] = check(pg, "阴影", cfg.get(f"{key}_shadow", True))
+            v["stroke_w"] = combo(pg, "描边宽(像素)", STROKE_CHOICES,
                                   int(cfg.get(f"{key}_stroke_w", 0) or 0))
-            v["stroke_color"] = self._color_row(add, pg, f"{zh}描边色", f"{key}_stroke_color", "#000000")
+            v["stroke_color"] = self._color_row(add, pg, "描边色", f"{key}_stroke_color", "#000000")
             self._line_vars[key] = v
 
         # ---------------- 排版 ----------------

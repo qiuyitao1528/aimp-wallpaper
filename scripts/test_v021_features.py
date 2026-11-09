@@ -251,6 +251,8 @@ from aimp_wallpaper.settings_gui import SettingsWindow  # noqa: E402
 win = SettingsWindow(root, gui_cfg)
 n_labels = len(win._line_vars)
 check("gui line groups", n_labels == 3, f"groups={list(win._line_vars)}")
+check("gui 7 tabs", set(win._pages) == {"壁纸", "歌名", "歌手", "专辑", "排版", "面板", "系统"},
+      str(sorted(win._pages)))
 win._line_vars["title"]["stroke_w"].set("3")
 win._line_vars["title"]["shadow"].set(False)
 win._line_vars["album"]["font"].set("黑体")
