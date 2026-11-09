@@ -812,8 +812,14 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                 "album": meta.get("album") or "",
                 "info": _format_info(cfg, meta),  # 歌曲信息行（模板渲染，全未知则空=隐藏）
             }
+            # 行顺序可调（line_order）：按配置顺序出图；未知键剔除、缺失键按默认序补尾
+            known = ("title", "artist", "album", "info")
+            order = [g for g in (cfg.get("line_order") or known) if g in known]
+            for g in known:
+                if g not in order:
+                    order.append(g)
             blocks = []  # (组名, 折行后各行, 字体, 字色RGB, 阴影, 描边宽, 描边色RGB)
-            for g in ("title", "artist", "album", "info"):
+            for g in order:
                 if not cfg.get(f"{g}_show", True):
                     continue  # 逐行显示开关
                 text = texts[g]
@@ -846,13 +852,14 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
             def _intra(g):
                 return t_gap if g == "title" else sub_gap
 
-            def _before(g):
-                return t_sub_gap if g == "artist" else sub_gap
-
+            # 行间距语义：歌名行之后用 title_sub_gap（随行顺序走），其余行间用 sub_gap
             block_h = 0
-            for idx, (g, lines, font, *_rest) in enumerate(blocks):
-                block_h += (_before(g) if idx else 0) + font.size * len(lines) \
-                    + _intra(g) * (len(lines) - 1)
+            prev_g = None
+            for g, lines, font, *_rest in blocks:
+                if prev_g is not None:
+                    block_h += t_sub_gap if prev_g == "title" else sub_gap
+                block_h += font.size * len(lines) + _intra(g) * (len(lines) - 1)
+                prev_g = g
             dy = int(cfg.get("text_offset_y", 0) or 0)
             valign = cfg.get("text_valign", "center")
             if valign == "top":
@@ -868,14 +875,16 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                 draw_x, draw_anchor = tx + tw_max, "ra"
             else:
                 draw_x, draw_anchor = tx, "la"
-            for idx, (g, lines, font, fill, shadow, sw, srgb) in enumerate(blocks):
-                if idx:
-                    ty += _before(g)
+            prev_g = None
+            for g, lines, font, fill, shadow, sw, srgb in blocks:
+                if prev_g is not None:
+                    ty += t_sub_gap if prev_g == "title" else sub_gap
                 for ln in lines:
                     _draw_shadow_text(layer, (draw_x, ty), ln, font, fill=(*fill, 255),
                                       anchor=draw_anchor, shadow=shadow, stroke_width=sw,
                                       stroke_fill=(*srgb, 255) if sw else None)
                     ty += font.size + _intra(g)
+                prev_g = g
             anchor = (tx, ty - _intra(blocks[-1][0])) if blocks else None  # 末行文字底部（全隐藏时无锚点）
             bg.alpha_composite(layer)
     if _pause_on and _pct and _scope == "all":

@@ -56,6 +56,7 @@ DEFAULTS = {
     "artist_show": True,        # 是否显示歌手
     "album_show": True,         # 是否显示专辑
     "info_show": True,          # 是否显示歌曲信息行
+    "line_order": ["title", "artist", "album", "info"],  # 右侧四行的显示顺序（设置页可上移/下移）
     "info_template": "{format} {samplerate} {bitrate} {bits}",  # 歌曲信息模板
     #   可用 token：{format} {samplerate} {bitrate} {bits} {duration}
     "title_size_ratio": 0.075,  # 歌名字号占屏高比例

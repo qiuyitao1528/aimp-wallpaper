@@ -212,6 +212,13 @@ class SettingsWindow:
             v["stroke_w"] = combo(pg, "描边宽(像素)", STROKE_CHOICES,
                                   int(cfg.get(f"{key}_stroke_w", 0) or 0))
             v["stroke_color"] = self._color_row(add, pg, "描边色", f"{key}_stroke_color", "#000000")
+            # 行顺序：上移/下移按钮（改 line_order，保存即按新顺序重渲染）
+            f_btns = ttk.Frame(pg)
+            ttk.Button(f_btns, text="上移 ↑", width=7,
+                       command=lambda k=key: self._move_line(k, -1)).pack(side="left", padx=(0, 6))
+            ttk.Button(f_btns, text="下移 ↓", width=7,
+                       command=lambda k=key: self._move_line(k, 1)).pack(side="left")
+            add(pg, "行顺序", f_btns)
             self._line_vars[key] = v
         # 歌曲信息模板（tk.Entry，可自由编辑；token 见 config 注释）
         self._info_tpl_var = tk.StringVar(value=str(cfg.get(
@@ -294,6 +301,22 @@ class SettingsWindow:
         except (TypeError, ValueError):
             return
         self.cfg[key] = max(lo, min(v, hi))
+
+    def _move_line(self, key: str, delta: int):
+        """右侧文字行顺序上移/下移：改 line_order 并保存，壁纸立即按新顺序重渲染。"""
+        default = ["title", "artist", "album", "info"]
+        order = [g for g in (self.cfg.get("line_order") or default) if g in default]
+        for g in default:
+            if g not in order:
+                order.append(g)
+        if key in order:
+            i = order.index(key)
+            j = i + delta
+            if 0 <= j < len(order):
+                order[i], order[j] = order[j], order[i]
+                self.cfg["line_order"] = order
+                config.save(self.cfg)
+                self.status.config(text="行顺序已保存并生效", foreground="#2E7D32")
 
     def _save(self):
         self.cfg["bg_style"] = dict(BG_CHOICES).get(self.bg_style_var.get(), "blur")

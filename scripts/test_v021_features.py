@@ -242,6 +242,7 @@ check("no-cover render ok", img_nc.size == (W, H))
 
 # ---------- E. 设置窗口离线跑一遍（存盘写临时配置） ----------
 import tkinter as tk  # noqa: E402
+from tkinter import ttk  # noqa: E402
 config.CONFIG_PATH = os.path.join(tmp, "gui", "config.json")
 os.makedirs(os.path.dirname(config.CONFIG_PATH), exist_ok=True)
 root = tk.Tk()
@@ -251,6 +252,18 @@ from aimp_wallpaper.settings_gui import SettingsWindow  # noqa: E402
 win = SettingsWindow(root, gui_cfg)
 n_labels = len(win._line_vars)
 check("gui line groups", n_labels == 4, f"groups={list(win._line_vars)}")
+
+def _count_btns(widget):
+    n = 0
+    for c in widget.winfo_children():
+        if isinstance(c, ttk.Button):
+            n += 1
+        n += _count_btns(c)
+    return n
+
+
+check("gui reorder buttons", _count_btns(win._pages["歌名"]) == 2,
+      f"btns={_count_btns(win._pages['歌名'])}")
 check("gui 8 tabs", set(win._pages) == {"壁纸", "歌名", "歌手", "专辑", "歌曲信息", "排版", "面板", "系统"},
       str(sorted(win._pages)))
 win._line_vars["title"]["stroke_w"].set("3")
@@ -627,6 +640,26 @@ for a_mode in ("left", "right", "center", "center_bound"):
                                              {**cfg_a, "cover_anchor": a_mode}, want_anchor=True)
     check(f"anchor tx {a_mode}", abs(anch_a[0] - exp_tx[a_mode]) <= 3,
           f"tx={anch_a[0]} exp={exp_tx[a_mode]}")
+
+print()
+
+# ---------- L. 行顺序可调 ----------
+img_def = arr(wallpaper.render_poster(cover, meta_i, W, H, cfg_i))
+cfg_o = {**cfg_i, "line_order": ["info", "album", "title", "artist"]}
+img_o = arr(wallpaper.render_poster(cover, meta_i, W, H, cfg_o))
+check("line order changes layout", np.abs(img_o - img_def).sum() > 10000,
+      f"diff={np.abs(img_o - img_def).sum():.0f}")
+img_back = wallpaper.render_poster(
+    cover, meta_i, W, H, {**cfg_i, "line_order": ["title", "artist", "album", "info"]})
+check("line order default match", np.abs(arr(img_back) - img_def).sum() == 0)
+# 防御：未知键剔除 / 缺失键按默认序补尾
+img_bad = wallpaper.render_poster(cover, meta_i, W, H, {**cfg_i, "line_order": ["bogus", "info"]})
+check("line order garbage ok", img_bad.size == (W, H))
+img_miss_a = wallpaper.render_poster(
+    cover, meta_i, W, H, {**cfg_i, "line_order": ["info", "title", "album"]})
+img_miss_b = wallpaper.render_poster(
+    cover, meta_i, W, H, {**cfg_i, "line_order": ["info", "title", "artist"]})
+check("missing keys appended", np.abs(arr(img_miss_a) - arr(img_miss_b)).sum() > 0)
 
 print()
 print("RESULT:", "ALL_PASS" if not FAILS else f"FAILED={FAILS}")
