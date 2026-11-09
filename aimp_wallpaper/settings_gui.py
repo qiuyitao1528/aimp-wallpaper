@@ -17,6 +17,14 @@ SCALE_CHOICES = ["0.5", "0.6", "0.7", "0.8", "0.9", "1.0", "1.1", "1.2", "1.4", 
 FPS_CHOICES = ["15", "20", "24", "30", "45", "60", "90", "120"]
 ALIGN_ITEMS = [("左对齐", "left"), ("居中", "center"), ("右对齐", "right")]
 VALIGN_ITEMS = [("顶部", "top"), ("居中", "center"), ("底部", "bottom")]
+BG_CHOICES = [("高斯模糊", "blur"), ("模糊+暗角", "blur_vignette"),
+              ("原图铺满", "sharp"), ("主色渐变", "gradient")]
+NIGHT_ALPHA_CHOICES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]
+OVERFLOW_ITEMS = [("换行", "wrap"), ("省略号", "ellipsis")]
+SPACE_WRAP_ITEMS = [("关", "0"), ("2", "2"), ("3", "3"), ("4", "4"),
+                    ("5", "5"), ("6", "6"), ("8", "8"), ("10", "10")]
+STROKE_CHOICES = [0, 1, 2, 3, 4, 6]
+LINE_ITEMS = (("title", "歌名"), ("artist", "歌手"), ("album", "专辑"))
 FONTS_FALLBACK = [
     ("微软雅黑（默认）", "msyhbd.ttc"), ("微软雅黑 常规", "msyh.ttc"), ("微软雅黑 Light", "msyhl.ttc"),
     ("黑体", "simhei.ttf"), ("宋体", "simsun.ttc"), ("楷体", "simkai.ttf"),
@@ -51,7 +59,8 @@ def set_autostart(enabled: bool) -> bool:
                   "$s.TargetPath='{}';$s.Arguments='{}';$s.WorkingDirectory='{}';$s.Save()").format(
                       lnk.replace("'", "''"), target.replace("'", "''"),
                       args.replace("'", "''"), wd.replace("'", "''"))
-            subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps], capture_output=True, timeout=20)
+            subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps], capture_output=True,
+                           timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             return os.path.exists(lnk)
         if os.path.exists(lnk):
             os.remove(lnk)
@@ -90,7 +99,9 @@ class SettingsWindow:
 
         self._fonts = _available_fonts()
         self._file_to_label = {f: lb for lb, f in self._fonts}
+        self._label_to_file = {lb: f for lb, f in self._fonts}
         self._default_label = "默认（微软雅黑）"
+        self._label_to_file[self._default_label] = None
 
         nb = ttk.Notebook(self.win)
         nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
@@ -136,7 +147,12 @@ class SettingsWindow:
 
         # ---------------- 壁纸 ----------------
         pg = self._pages["壁纸"]
+        self.bg_style_var = labeled(pg, "背景方案", BG_CHOICES, cfg.get("bg_style", "blur"))
         self.blur_var = combo(pg, "背景模糊(像素)", BLUR_CHOICES, int(cfg.get("blur_radius", 28)))
+        self.night_var = check(pg, "跟随系统日/夜主题（夜间叠黑色遮罩）",
+                               cfg.get("theme_night_follow", False))
+        self.night_alpha_var = combo(pg, "夜间遮罩浓度(%)", NIGHT_ALPHA_CHOICES,
+                                     int(cfg.get("night_overlay", 30) or 30))
         self.cover_scale_var = combo(pg, "封面大小(倍率)", SCALE_CHOICES,
                                      cfg.get("cover_scale", 1.0) or 1.0)
         self.cover_dx_var = combo(pg, "封面 X 偏移(像素)", OFFSET_CHOICES,
@@ -144,28 +160,28 @@ class SettingsWindow:
         self.cover_dy_var = combo(pg, "封面 Y 偏移(像素)", OFFSET_CHOICES,
                                   int(cfg.get("cover_offset_y", 0) or 0))
 
-        # ---------------- 文字 ----------------
+        # ---------------- 文字（歌名/歌手/专辑三行各自独立样式） ----------------
         pg = self._pages["文字"]
-        self.title_px_var = combo(pg, "歌名字号(像素)", SIZE_CHOICES, px_of("title_size_ratio", 0.075))
-        self.title_font_var = combo(pg, "歌名字体",
-                                    [self._default_label] + [lb for lb, _ in self._fonts],
-                                    self._file_to_label.get(cfg.get("title_font_file"), self._default_label),
-                                    width=28)
-        self.title_color_var = self._color_row(add, pg, "歌名颜色", "title_color", "#FFFFFF")
-        self.title_of_var = labeled(pg, "歌名过长", [("换行", "wrap"), ("省略号", "ellipsis")],
-                                    cfg.get("title_overflow", "wrap"))
-        self.tbold_var = check(pg, "歌名加粗", cfg.get("title_bold", True))
-
-        self.sub_px_var = combo(pg, "副行字号(像素)", SIZE_CHOICES, px_of("sub_size_ratio", 0.042))
-        self.sub_font_var = combo(pg, "歌手·专辑字体",
-                                  [self._default_label] + [lb for lb, _ in self._fonts],
-                                  self._file_to_label.get(cfg.get("sub_font_file"), self._default_label),
-                                  width=28)
-        self.sub_color_var = self._color_row(add, pg, "副行颜色", "sub_color", "#FFFFFF")
-        self.sub_of_var = labeled(pg, "副行过长", [("省略号", "ellipsis"), ("换行", "wrap")],
-                                  cfg.get("sub_overflow", "ellipsis"))
-        self.sbold_var = check(pg, "副行加粗", cfg.get("sub_bold", False))
-        self.shadow_var = check(pg, "文字阴影", cfg.get("text_shadow", True))
+        self._line_vars = {}
+        for key, zh in LINE_ITEMS:
+            v = {}
+            v["size"] = combo(pg, f"{zh}字号(像素)", SIZE_CHOICES,
+                              px_of(f"{key}_size_ratio", 0.075 if key == "title" else 0.042))
+            v["font"] = combo(pg, f"{zh}字体",
+                              [self._default_label] + [lb for lb, _ in self._fonts],
+                              self._file_to_label.get(cfg.get(f"{key}_font_file"), self._default_label),
+                              width=28)
+            v["color"] = self._color_row(add, pg, f"{zh}颜色", f"{key}_color", "#FFFFFF")
+            v["of"] = labeled(pg, f"{zh}过长", OVERFLOW_ITEMS,
+                              cfg.get(f"{key}_overflow", "wrap" if key == "title" else "ellipsis"))
+            v["bold"] = check(pg, f"{zh}加粗", cfg.get(f"{key}_bold", key == "title"))
+            v["shadow"] = check(pg, f"{zh}阴影", cfg.get(f"{key}_shadow", True))
+            v["stroke_w"] = combo(pg, f"{zh}描边宽(像素)", STROKE_CHOICES,
+                                  int(cfg.get(f"{key}_stroke_w", 0) or 0))
+            v["stroke_color"] = self._color_row(add, pg, f"{zh}描边色", f"{key}_stroke_color", "#000000")
+            self._line_vars[key] = v
+        self.space_wrap_var = labeled(pg, "空格断行(字符)", SPACE_WRAP_ITEMS,
+                                      str(int(cfg.get("wrap_space_window", 5) or 0)))
 
         # ---------------- 排版 ----------------
         pg = self._pages["排版"]
@@ -231,12 +247,24 @@ class SettingsWindow:
         self.cfg[key] = max(lo, min(v, hi))
 
     def _save(self):
+        self.cfg["bg_style"] = dict(BG_CHOICES).get(self.bg_style_var.get(), "blur")
         self._int(self.blur_var, "blur_radius", 4, 200)
+        self.cfg["theme_night_follow"] = self.night_var.get()
+        self._int(self.night_alpha_var, "night_overlay", 0, 95)
         self._float(self.cover_scale_var, "cover_scale", 0.3, 2.0)
         self._int(self.cover_dx_var, "cover_offset_x", -2000, 2000)
         self._int(self.cover_dy_var, "cover_offset_y", -2000, 2000)
-        self._int(self.title_px_var, "title_size_ratio", 12, self.screen_h, ratio=True)
-        self._int(self.sub_px_var, "sub_size_ratio", 10, self.screen_h, ratio=True)
+        for key, v in self._line_vars.items():
+            self._int(v["size"], f"{key}_size_ratio", 8, self.screen_h, ratio=True)
+            self._int(v["stroke_w"], f"{key}_stroke_w", 0, 6)
+            self.cfg[f"{key}_font_file"] = self._label_to_file.get(v["font"].get())
+            self.cfg[f"{key}_color"] = v["color"].get()
+            self.cfg[f"{key}_bold"] = v["bold"].get()
+            self.cfg[f"{key}_shadow"] = v["shadow"].get()
+            self.cfg[f"{key}_overflow"] = dict(OVERFLOW_ITEMS).get(v["of"].get(),
+                                                                   "wrap" if key == "title" else "ellipsis")
+            self.cfg[f"{key}_stroke_color"] = v["stroke_color"].get()
+        self.cfg["wrap_space_window"] = int(dict(SPACE_WRAP_ITEMS).get(self.space_wrap_var.get(), "5"))
         self._int(self.tsg_var, "title_sub_gap_ratio", 0, 300, ratio=True)
         self._int(self.tlg_var, "title_line_gap_ratio", 0, 300, ratio=True)
         self._int(self.slg_var, "sub_line_gap_ratio", 0, 300, ratio=True)
@@ -244,26 +272,15 @@ class SettingsWindow:
         self._int(self.text_dy_var, "text_offset_y", -2000, 2000)
         self._int(self.fps_var, "vis_fps", 10, 120)
 
-        label_to_file = {lb: f for lb, f in self._fonts}
-        label_to_file[self._default_label] = None
-        self.cfg["title_font_file"] = label_to_file.get(self.title_font_var.get())
-        self.cfg["sub_font_file"] = label_to_file.get(self.sub_font_var.get())
-        self.cfg["title_color"] = self.title_color_var.get()
-        self.cfg["sub_color"] = self.sub_color_var.get()
-        self.cfg["title_bold"] = self.tbold_var.get()
-        self.cfg["sub_bold"] = self.sbold_var.get()
-        self.cfg["text_shadow"] = self.shadow_var.get()
-        self.cfg["title_overflow"] = dict([("换行", "wrap"), ("省略号", "ellipsis")]).get(
-            self.title_of_var.get(), "wrap")
-        self.cfg["sub_overflow"] = dict([("换行", "wrap"), ("省略号", "ellipsis")]).get(
-            self.sub_of_var.get(), "ellipsis")
         self.cfg["text_align"] = dict(ALIGN_ITEMS).get(self.text_align_var.get(), "left")
         self.cfg["text_valign"] = dict(VALIGN_ITEMS).get(self.text_valign_var.get(), "center")
         self.cfg["vis_locked"] = self.lock_var.get()
         self.cfg["restore_on_quit"] = self.restore_var.get()
         config.save(self.cfg)
 
-        if not set_autostart(self.autostart_var.get()):
+        # 自启动：只在勾选状态相对现状有变化时才写（避免每次保存都弹 PowerShell 窗口）
+        want_autostart = self.autostart_var.get()
+        if want_autostart != autostart_enabled() and not set_autostart(want_autostart):
             self.status.config(text="自启动设置写入失败", foreground="#C0392B")
         else:
             self.status.config(text="已保存，壁纸正在重新渲染", foreground="#2E7D32")

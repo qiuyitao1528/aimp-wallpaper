@@ -4,7 +4,7 @@
 ; 注意：config.json / portable.flag 不打进安装包（用户状态与便携标记由运行时生成）
 
 #define MyAppName "AIMP Wallpaper"
-#define MyAppVersion "0.2.0"
+#define MyAppVersion "0.2.2"
 #define MyAppExeName "aimp-wallpaper.exe"
 #define MyAppMutex "AIMP_Wallpaper_Single"
 
@@ -35,10 +35,19 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.i
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "autostart"; Description: "开机自动启动（也可稍后在设置里开关）"; \
-    GroupDescription: "其他任务:"
+; 自启任务只在首次安装时询问：升级完全不碰启动项，开关由设置 GUI 全权管理
+; （否则每次升级安装都会把用户在设置里关掉的自启又勾回来）
+Name: "autostart"; Description: "开机自动启动（仅首次安装询问；之后在设置里开关）"; \
+    GroupDescription: "其他任务:"; Check: NotIsUpgrade()
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
     GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
+[Code]
+function NotIsUpgrade(): Boolean;
+begin
+  { [Code] 的 Pascal 字符串里 { 不需要 {{ 转义（那套转义只用于 Setup 段的常量值） }
+  Result := not RegKeyExists(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{F4054C13-F6FF-4974-B06A-00916371A6FB}_is1');
+end;
 
 [Files]
 Source: "dist-setup\aimp-wallpaper\*"; DestDir: "{app}"; \

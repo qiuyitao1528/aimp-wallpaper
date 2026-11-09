@@ -42,6 +42,8 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
     last_cover = None
     last_meta = None
     last_cfg_mtime = None
+    last_dark = None       # 日/夜主题跟随的基线（None=还没查过）
+    dark_check_t = 0.0
 
     def render(cover, meta, why: str) -> bool:
         try:
@@ -79,6 +81,16 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
                 render(cover, meta, "热重载")
             else:
                 applog.log("热重载：尚无曲目可渲染，跳过")
+
+        # 日/夜主题跟随：每 ~3s 查一次系统主题，翻转后用当前曲目重渲染
+        if cfg.get("theme_night_follow") and time.monotonic() - dark_check_t > 3.0:
+            dark_check_t = time.monotonic()
+            dark = wallpaper.system_is_dark()
+            if last_dark is None:
+                last_dark = dark
+            elif dark != last_dark and (last_cover is not None or last_meta is not None):
+                last_dark = dark
+                render(last_cover, last_meta, "主题切换")
 
         gen = ipc.wait_track_change(timeout=0.5)
         if stop.is_set() or gen == last_gen or not ipc.snapshot()["connected"]:

@@ -12,6 +12,7 @@ import re
 import sys
 import time
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from . import config
@@ -184,9 +185,113 @@ def _load_font(bold: bool, size: int, font_file: str | None = None) -> tuple[Ima
     return ImageFont.load_default(size), False
 
 
+def _placeholder_bg(w: int, h: int) -> Image.Image:
+    bg = Image.new("RGB", (w, h))
+    d = ImageDraw.Draw(bg)
+    top, bottom = (34, 40, 54), (16, 18, 26)
+    for y in range(h):
+        t = y / max(1, h - 1)
+        d.line([(0, y), (w, y)], fill=tuple(int(a + (b - a) * t) for a, b in zip(top, bottom)))
+    return bg
+
+
+def _cover_fit_full(im: Image.Image, w: int, h: int) -> Image.Image:
+    """等比放大铺满再居中裁剪（全分辨率 LANCZOS）。"""
+    im = im.convert("RGB")
+    scale = max(w / im.width, h / im.height)
+    im = im.resize((max(w, int(im.width * scale + 0.5)), max(h, int(im.height * scale + 0.5))), Image.LANCZOS)
+    x, y = (im.width - w) // 2, (im.height - h) // 2
+    return im.crop((x, y, x + w, y + h))
+
+
+def _dominant_color(cover: Image.Image) -> tuple[int, int, int]:
+    """封面平均主色（适度提饱和，偏暗时多提）。"""
+    small = np.asarray(cover.convert("RGB").resize((40, 40)), dtype=np.float64)
+    r, g, b = small[..., 0].mean(), small[..., 1].mean(), small[..., 2].mean()
+    mx = max(r, g, b)
+    boost = 1.25 if mx > 40 else 1.8
+    return (min(255, int(r * boost)), min(255, int(g * boost)), min(255, int(b * boost)))
+
+
+def _vignette(img: Image.Image, strength: int = 120) -> Image.Image:
+    """叠加上透下暗的黑色渐变（电影感）。"""
+    w, h = img.size
+    grad = Image.new("L", (1, h))
+    for y in range(h):
+        grad.putpixel((0, y), int(strength * (y / max(1, h - 1)) ** 1.2))
+    grad = grad.resize((w, h))
+    out = img.convert("RGBA")
+    black = Image.new("RGBA", (w, h), (0, 0, 0, 255))
+    black.putalpha(grad)
+    out.alpha_composite(black)
+    return out.convert("RGB")
+
+
+_DARK_CACHE: tuple | None = None
+
+
+def _system_dark_mode() -> bool:
+    """Windows 日/夜主题：SystemUsesLightTheme 优先（桌面配系统模式），缺省回 AppsUseLightTheme（1=浅色）。"""
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                             r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+    except OSError:
+        return False
+    with key:
+        for name in ("SystemUsesLightTheme", "AppsUseLightTheme"):
+            try:
+                v, _ = winreg.QueryValueEx(key, name)
+                return int(v) == 0
+            except OSError:
+                continue
+    return False
+
+
+def system_is_dark() -> bool:
+    """系统是否处于深色（夜间）主题，结果缓存 2s。"""
+    global _DARK_CACHE
+    now = time.monotonic()
+    if _DARK_CACHE and now - _DARK_CACHE[0] < 2.0:
+        return _DARK_CACHE[1]
+    v = _system_dark_mode()
+    _DARK_CACHE = (now, v)
+    return v
+
+
+def _night_alpha(cfg: dict) -> int:
+    """夜间黑色遮罩的 alpha：开启跟随且系统处于深色主题时生效（0=不叠加）。"""
+    if not cfg.get("theme_night_follow"):
+        return 0
+    if not system_is_dark():
+        return 0
+    pct = max(0, min(95, int(cfg.get("night_overlay", 30) or 0)))
+    return pct * 255 // 100
+
+
 def _blur_bg(cover: Image.Image | None, w: int, h: int, cfg: dict) -> Image.Image:
-    if cover is not None:
-        # 背景本身就是模糊图：1/4 尺寸上算完再放大（BOX 缩小最快，视觉无差）
+    """背景方案分发：blur=高斯模糊 / blur_vignette=模糊+暗角 / sharp=原图铺满 / gradient=主色渐变。
+
+    跟随日夜主题时，深色主题再叠一层黑色遮罩（浓度=night_overlay%）。
+    """
+    style = cfg.get("bg_style", "blur")
+    if cover is None:
+        bg = _placeholder_bg(w, h)
+    elif style == "sharp":
+        bg = _cover_fit_full(cover, w, h)
+        bg = ImageEnhance.Brightness(bg).enhance(cfg["darken"])
+    elif style == "gradient":
+        base = _dominant_color(cover)
+        k = float(cfg["darken"])
+        top = tuple(int(c * 0.30 * k / max(0.75, k)) for c in base)
+        bottom = tuple(min(255, int(c * 0.75 * max(0.75, k))) for c in base)
+        bg = Image.new("RGB", (w, h))
+        d = ImageDraw.Draw(bg)
+        for y in range(h):
+            t = y / max(1, h - 1)
+            d.line([(0, y), (w, y)], fill=tuple(int(a + (b - a) * t) for a, b in zip(top, bottom)))
+    else:
+        # blur / blur_vignette：背景本身就是模糊图，1/4 尺寸上算完再放大（BOX 缩小最快，视觉无差）
         sw, sh = max(2, w // 4), max(2, h // 4)
         im = cover.convert("RGB")
         scale = max(sw / im.width, sh / im.height)
@@ -198,13 +303,13 @@ def _blur_bg(cover: Image.Image | None, w: int, h: int, cfg: dict) -> Image.Imag
         bg = ImageEnhance.Brightness(bg).enhance(cfg["darken"])
         bg = ImageEnhance.Color(bg).enhance(0.9)
         bg = bg.resize((w, h), Image.BILINEAR)
-    else:
-        bg = Image.new("RGB", (w, h))
-        d = ImageDraw.Draw(bg)
-        top, bottom = (34, 40, 54), (16, 18, 26)
-        for y in range(h):
-            t = y / max(1, h - 1)
-            d.line([(0, y), (w, y)], fill=tuple(int(a + (b - a) * t) for a, b in zip(top, bottom)))
+        if style == "blur_vignette":
+            bg = _vignette(bg, 120)
+    alpha = _night_alpha(cfg)
+    if alpha:  # 夜间遮罩：统一在成品上叠黑，对四种方案都生效
+        bg = bg.convert("RGBA")
+        bg.alpha_composite(Image.new("RGBA", bg.size, (0, 0, 0, alpha)))
+        bg = bg.convert("RGB")
     return bg
 
 
@@ -296,17 +401,17 @@ def _text_len(draw, text: str, font) -> float:
 
 
 def _draw_runs(d, x: float, y: float, runs, fill, anchor: str,
-               stroke_width: int = 0, base_ascent: int = 0):
+               stroke_width: int = 0, stroke_fill=None, base_ascent: int = 0):
     """按 anchor（'la'/'ma'/'ra'）绘制多字体文本；非首段按 ascent 差对齐基线。"""
     widths = [d.textlength(t, font=f) for t, f in runs]
     total = sum(widths)
     start = x - total / 2 if anchor.startswith("m") else (x - total if anchor.startswith("r") else x)
     cur = start
+    sf = stroke_fill if (stroke_width and stroke_fill is not None) else (fill if stroke_width else None)
     for (t, f), w in zip(runs, widths):
         dy = base_ascent - f.getmetrics()[0]
         d.text((cur, y + dy), t, font=f, fill=fill, anchor="l" + anchor[1],
-               stroke_width=stroke_width,
-               stroke_fill=fill if stroke_width else None)
+               stroke_width=stroke_width, stroke_fill=sf)
         cur += w
 
 
@@ -319,32 +424,44 @@ def _ellipsis(draw, text, font, max_w):
     return (text + "…") if text else "…"
 
 
-def _wrap_title(draw, text, font, max_w, max_lines=2):
-    """超宽处理：max_lines>1 按像素宽度折行（末行放不下收省略号）；==1 直接省略号截断。"""
+def _wrap_title(draw, text, font, max_w, max_lines=2, space_window=0):
+    """超宽处理：max_lines>1 按像素宽度折行（末行放不下收省略号）；==1 直接省略号截断。
+
+    space_window>0：折行点的剩余部分前 space_window 个字符内有空格时，
+    断点移到该空格后（首行允许轻微超宽，避免把短词组切碎）。
+    """
     if max_lines <= 1:
         return [_ellipsis(draw, text, font, max_w)]
     if _text_len(draw, text, font) <= max_w:
         return [text]
     lines, cur = [], ""
-    for ch in text:
-        if _text_len(draw, cur + ch, font) > max_w and cur:
-            lines.append(cur)
-            cur = ch
+    i, n = 0, len(text)
+    line_start = 0  # 当前正在累积的这一行在原文里的起点（末行收省略号要用）
+    while i < n:
+        ch = text[i]
+        if cur and _text_len(draw, cur + ch, font) > max_w:
+            if space_window > 0:
+                j = text.find(" ", i, i + space_window)
+                if j >= 0:  # 首行吸收到空格（含空格），在空格后直接换行
+                    cur += text[i:j + 1]
+                    i = j + 1
+            lines.append(cur.rstrip())
+            cur = ""
+            if len(lines) == max_lines:  # 装不下：末行=剩余全部文本收省略号
+                lines[-1] = _ellipsis(draw, text[line_start:].rstrip(), font, max_w)
+                break
+            line_start = i
         else:
             cur += ch
-        if len(lines) == max_lines:
-            break
-    if len(lines) == max_lines:  # 装不下：末行收省略号
-        rest = cur + text[text.index(cur) + len(cur):] if cur and text.find(cur) >= 0 else cur
-        lines[-1] = _ellipsis(draw, rest.rstrip(), font, max_w)
-    elif cur:
+            i += 1
+    if cur and len(lines) < max_lines:
         lines.append(cur)
     return lines
 
 
 def _draw_shadow_text(layer, xy, text, font, fill=(255, 255, 255, 255), anchor="la",
-                      shadow_alpha=140, stroke_width=0, shadow=True):
-    """逐字符字体回退后再绘制（避免缺字形画方框）。"""
+                      shadow_alpha=140, stroke_width=0, stroke_fill=None, shadow=True):
+    """逐字符字体回退后再绘制（避免缺字形画方框）。stroke_fill=描边色（None=随字色）。"""
     d = ImageDraw.Draw(layer)
     x, y = xy
     off = max(2, font.size // 24)
@@ -354,8 +471,10 @@ def _draw_shadow_text(layer, xy, text, font, fill=(255, 255, 255, 255), anchor="
     ascent = font.getmetrics()[0]
     if shadow:
         _draw_runs(d, x + off, y + off, runs, (0, 0, 0, shadow_alpha), anchor,
-                   stroke_width=stroke_width, base_ascent=ascent)
-    _draw_runs(d, x, y, runs, fill, anchor, stroke_width=stroke_width, base_ascent=ascent)
+                   stroke_width=stroke_width, stroke_fill=(0, 0, 0, shadow_alpha),
+                   base_ascent=ascent)
+    _draw_runs(d, x, y, runs, fill, anchor, stroke_width=stroke_width,
+               stroke_fill=stroke_fill, base_ascent=ascent)
 
 
 def _rounded(im: Image.Image, radius: int) -> Image.Image:
@@ -432,44 +551,56 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
         except OSError:
             pass
 
-    # 右侧文字区
+    # 右侧文字区（歌名/歌手/专辑三行各自独立样式：字号/字体/颜色/加粗/过长/阴影/描边）
     anchor = None
     if cfg["show_text"]:
         tx = cx + cw + int(h * 0.055) + int(cfg.get("text_offset_x", 0) or 0)
         tw_max = w - tx - int(w * 0.06)
         if tw_max > h * 0.15:
             layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            title_font_file = cfg.get("title_font_file")
-            sub_font_file = cfg.get("sub_font_file")
-            title_bold = bool(cfg.get("title_bold", True))
-            sub_bold = bool(cfg.get("sub_bold", False))
-            shadow = bool(cfg.get("text_shadow", True))
-            title_font, title_real = _load_font(title_bold, int(h * cfg["title_size_ratio"]), title_font_file)
-            sub_font, sub_real = _load_font(sub_bold, int(h * cfg["sub_size_ratio"]), sub_font_file)
-            # 加粗降级链：真实粗体字面/可变字体实例 → 无则 1px 轻描边（重描边会把宋体类细横画肿掉）
-            title_stroke = 1 if (title_bold and not title_real) else 0
-            sub_stroke = 1 if (sub_bold and not sub_real) else 0
-            title = meta.get("title") or "未知曲目"
-            lines = _wrap_title(ImageDraw.Draw(layer), title, title_font, tw_max,
-                                1 if cfg.get("title_overflow", "wrap") == "ellipsis" else 2)
-            artist = meta.get("artist") or "未知艺术家"
-            album = meta.get("album") or ""
-            # 歌手/专辑同名也各占一行（此前同名被当重复吞掉，用户报为 bug）
-            sub_entries = [artist] + ([album] if album else [])
-            sub_draw = ImageDraw.Draw(layer)
-            sub_wrap = cfg.get("sub_overflow", "ellipsis") == "wrap"
-            sub_lines = []
-            for s in sub_entries:
-                if sub_wrap:  # 折行（每条最多 2 行，末行省略号）
-                    sub_lines.extend(_wrap_title(sub_draw, s, sub_font, tw_max, 2))
-                else:         # 省略号截断
-                    sub_lines.append(_ellipsis(sub_draw, s, sub_font, tw_max))
-            line_gap = int(h * cfg.get("title_line_gap_ratio", 0.012))
-            sub_gap = int(h * cfg.get("sub_line_gap_ratio", 0.014))
-            block_gap = int(h * cfg.get("title_sub_gap_ratio", 0.02))
-            th = title_font.size * len(lines) + line_gap * (len(lines) - 1)
-            sh = sub_font.size * len(sub_lines) + sub_gap * (len(sub_lines) - 1)
-            block_h = th + block_gap + sh
+            draw = ImageDraw.Draw(layer)
+            space_window = max(0, min(20, int(cfg.get("wrap_space_window", 0) or 0)))
+            texts = {
+                "title": meta.get("title") or "未知曲目",
+                "artist": meta.get("artist") or "未知艺术家",
+                "album": meta.get("album") or "",
+            }
+            blocks = []  # (组名, 折行后各行, 字体, 字色RGB, 阴影, 描边宽, 描边色RGB)
+            for g in ("title", "artist", "album"):
+                text = texts[g]
+                if not text:
+                    continue
+                bold = bool(cfg.get(f"{g}_bold", g == "title"))
+                font, real_bold = _load_font(
+                    bold, int(h * float(cfg.get(f"{g}_size_ratio", 0.042) or 0.042)),
+                    cfg.get(f"{g}_font_file"))
+                # 描边：用户设置的宽度优先；未设时走加粗降级链兜底（真实粗体无需描边，
+                # 重描边会把宋体类细横画肿掉，故兜底只有 1px）
+                sw = max(0, min(6, int(cfg.get(f"{g}_stroke_w", 0) or 0)))
+                if sw == 0 and bold and not real_bold:
+                    sw = 1
+                overflow = cfg.get(f"{g}_overflow", "wrap" if g == "title" else "ellipsis")
+                if overflow == "wrap":  # 折行每条最多 2 行，末行省略号
+                    lines = _wrap_title(draw, text, font, tw_max, 2, space_window)
+                else:
+                    lines = [_ellipsis(draw, text, font, tw_max)]
+                blocks.append((g, lines, font, _hex_rgb(cfg.get(f"{g}_color"), (255, 255, 255)),
+                               bool(cfg.get(f"{g}_shadow", True)), sw,
+                               _hex_rgb(cfg.get(f"{g}_stroke_color"), (0, 0, 0))))
+            t_gap = int(h * cfg.get("title_line_gap_ratio", 0.012))   # 歌名折行间距
+            sub_gap = int(h * cfg.get("sub_line_gap_ratio", 0.014))   # 歌手/专辑折行与行间
+            t_sub_gap = int(h * cfg.get("title_sub_gap_ratio", 0.02))  # 歌名与副行间距
+
+            def _intra(g):
+                return t_gap if g == "title" else sub_gap
+
+            def _before(g):
+                return t_sub_gap if g == "artist" else sub_gap
+
+            block_h = 0
+            for idx, (g, lines, font, *_rest) in enumerate(blocks):
+                block_h += (_before(g) if idx else 0) + font.size * len(lines) \
+                    + _intra(g) * (len(lines) - 1)
             dy = int(cfg.get("text_offset_y", 0) or 0)
             valign = cfg.get("text_valign", "center")
             if valign == "top":
@@ -485,18 +616,15 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                 draw_x, draw_anchor = tx + tw_max, "ra"
             else:
                 draw_x, draw_anchor = tx, "la"
-            tr, tg, tb = _hex_rgb(cfg.get("title_color"), (255, 255, 255))
-            sr, sg, sb = _hex_rgb(cfg.get("sub_color"), (255, 255, 255))
-            for ln in lines:
-                _draw_shadow_text(layer, (draw_x, ty), ln, title_font, fill=(tr, tg, tb, 255),
-                                  stroke_width=title_stroke, shadow=shadow, anchor=draw_anchor)
-                ty += title_font.size + line_gap
-            ty += block_gap
-            for s in sub_lines:
-                _draw_shadow_text(layer, (draw_x, ty), s, sub_font, fill=(sr, sg, sb, 255),
-                                  stroke_width=sub_stroke, shadow=shadow, anchor=draw_anchor)
-                ty += sub_font.size + sub_gap
-            anchor = (tx, ty - sub_gap)  # 专辑行文字底部
+            for idx, (g, lines, font, fill, shadow, sw, srgb) in enumerate(blocks):
+                if idx:
+                    ty += _before(g)
+                for ln in lines:
+                    _draw_shadow_text(layer, (draw_x, ty), ln, font, fill=(*fill, 255),
+                                      anchor=draw_anchor, shadow=shadow, stroke_width=sw,
+                                      stroke_fill=(*srgb, 255) if sw else None)
+                    ty += font.size + _intra(g)
+            anchor = (tx, ty - _intra(blocks[-1][0]))  # 末行文字底部
             bg.alpha_composite(layer)
     img = bg.convert("RGB")
     if want_anchor:
@@ -528,7 +656,8 @@ _BG_CACHE: dict = {}
 
 def _get_bg(cover_bytes: bytes | None, w: int, h: int, cfg: dict) -> Image.Image:
     """缓存的模糊背景（RGBA 原件，调用方 copy 后使用）；同封面连播零重复模糊。"""
-    key = (w, h, cfg.get("blur_radius"), cfg.get("darken"), hash(cover_bytes or b""))
+    key = (w, h, cfg.get("bg_style"), cfg.get("blur_radius"), cfg.get("darken"),
+           _night_alpha(cfg), hash(cover_bytes or b""))
     bg = _BG_CACHE.get(key)
     if bg is None:
         bg = _blur_bg(_open_cover(cover_bytes), w, h, cfg).convert("RGBA")

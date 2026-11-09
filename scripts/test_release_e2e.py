@@ -8,12 +8,15 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
 import zipfile
 
-ZIP_URL = "https://github.com/qiuyitao1528/aimp-wallpaper/releases/download/v0.1.3/aimp-wallpaper-v0.1.3-win64.zip"
+VER = sys.argv[1] if len(sys.argv) > 1 else "v0.1.3"
+ZIP_URL = ("https://github.com/qiuyitao1528/aimp-wallpaper/releases/download/"
+           f"{VER}/aimp-wallpaper-{VER}-win64.zip")
 TMP = os.path.join(tempfile.gettempdir(), "aimp-e2e")
 shutil.rmtree(TMP, ignore_errors=True)
 os.makedirs(TMP, exist_ok=True)
