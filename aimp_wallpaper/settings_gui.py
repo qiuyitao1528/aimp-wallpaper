@@ -12,6 +12,7 @@ from . import config, desktop
 
 SIZE_CHOICES = [32, 40, 48, 56, 64, 72, 80, 96, 112, 128, 144, 160]
 GAP_CHOICES = [0, 4, 6, 8, 10, 12, 16, 20, 24, 32, 40]
+BLUR_CHOICES = [8, 16, 24, 28, 32, 40, 56, 72, 100]
 FONTS_FALLBACK = [
     ("微软雅黑（默认）", "msyhbd.ttc"), ("微软雅黑 常规", "msyh.ttc"), ("微软雅黑 Light", "msyhl.ttc"),
     ("黑体", "simhei.ttf"), ("宋体", "simsun.ttc"), ("楷体", "simkai.ttf"),
@@ -141,6 +142,17 @@ class SettingsWindow:
             row += 1
             return var, lo, hi
 
+        # 背景模糊半径（像素，直接对应 blur_radius）
+        ttk.Label(self.win, text="背景模糊(像素)").grid(row=row, column=0, sticky="w", **pad)
+        blur_cur = int(cfg.get("blur_radius", 28))
+        blur_values = [str(x) for x in BLUR_CHOICES]
+        if str(blur_cur) not in blur_values:
+            blur_values.insert(0, str(blur_cur))
+        self.blur_var = tk.StringVar(value=str(blur_cur))
+        ttk.Combobox(self.win, textvariable=self.blur_var, values=blur_values, width=8).grid(
+            row=row, column=1, sticky="w", **pad)
+        row += 1
+
         self.title_px_var, _, _ = px_row("歌名字号(像素)", "title_size_ratio", 0.075, SIZE_CHOICES, 16, self.screen_h // 2)
         self.title_font_var = font_row("歌名字体", "title_font_file")
         self.sub_px_var, _, _ = px_row("副行字号(像素)", "sub_size_ratio", 0.042, SIZE_CHOICES, 12, self.screen_h // 2)
@@ -220,6 +232,10 @@ class SettingsWindow:
             pass
 
     def _save(self):
+        try:
+            self.cfg["blur_radius"] = max(4, min(200, int(str(self.blur_var.get()).strip())))
+        except ValueError:
+            pass
         def px_to_ratio(var, key, ratio_default, lo, hi):
             try:
                 px = int(str(var.get()).strip())
@@ -250,7 +266,7 @@ class SettingsWindow:
         except ValueError:
             pass  # 非法输入保留原值
         config.save(self.cfg)
-        if set_autostart(self.autostart_var.get()) != self.autostart_var.get():
+        if not set_autostart(self.autostart_var.get()):
             self.status.config(text="自启动设置写入失败", foreground="#C0392B")
         else:
             self.status.config(text="已保存，壁纸正在重新渲染", foreground="#2E7D32")

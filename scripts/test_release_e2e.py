@@ -13,7 +13,7 @@ import time
 import urllib.request
 import zipfile
 
-ZIP_URL = "https://github.com/qiuyitao1528/aimp-wallpaper/releases/download/v0.1.2/aimp-wallpaper-v0.1.2-win64.zip"
+ZIP_URL = "https://github.com/qiuyitao1528/aimp-wallpaper/releases/download/v0.1.3/aimp-wallpaper-v0.1.3-win64.zip"
 TMP = os.path.join(tempfile.gettempdir(), "aimp-e2e")
 shutil.rmtree(TMP, ignore_errors=True)
 os.makedirs(TMP, exist_ok=True)
