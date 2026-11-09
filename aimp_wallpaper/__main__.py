@@ -24,7 +24,7 @@ def _set_dpi_aware():
     """Per-Monitor V2：保证 GetMonitorRECT / 小部件拿到物理像素。"""
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     try:
-        user32.SetProcessDpiAwarenessContext.restype = wintypes_bool = ctypes.c_ssize_t
+        user32.SetProcessDpiAwarenessContext.restype = ctypes.c_ssize_t
         user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
         if not user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
             raise OSError

@@ -275,9 +275,6 @@ class VisPanel:
         bar_fall = BAR_FALL_SEC ** frame_s
         peak_fall = PEAK_MULT_SEC ** frame_s
         peak_drop = PEAK_DROP_SEC * frame_s
-        self._tick_n += 1
-        if now_maint := getattr(self, "_last_maint", None):
-            pass
         if time.monotonic() - getattr(self, "_last_maint", t0 - 1.0) >= 1.0:
             self._last_maint = t0  # ~1s：z-order 校验（错位才跨进程调）+ 锚点跟随
             self._seat_above_desktop()

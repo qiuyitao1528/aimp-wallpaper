@@ -9,7 +9,6 @@ import io
 import json
 import os
 import re
-import sys
 import time
 
 import numpy as np
@@ -735,8 +734,9 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
         bg.alpha_composite(Image.new("RGBA", bg.size, (0, 0, 0, _pct * 255 // 100)))
 
     # 前景清晰封面：保持原分辨率 1:1（绝不放大），超屏才等比缩小；不裁剪、不拉伸
-    cx = int(h * cfg["cover_margin_ratio"]) + int(cfg.get("cover_offset_x", 0) or 0)
-    max_h = int(h * 0.82)
+    dim = min(w, h)  # 几何比例基准：取宽高较小者（横屏=h 不变；竖屏=w 自适应）
+    cx = int(dim * cfg["cover_margin_ratio"]) + int(cfg.get("cover_offset_x", 0) or 0)
+    max_h = int(dim * 0.82)
     max_w = int(w * 0.52)
     anchor = cfg.get("cover_anchor", "left")  # 缩放基准：left=左缘固定（向右伸缩）/
     # right=右缘固定（向左伸缩，文字区恒定）/ center=槽位居中向两边伸展 /
@@ -798,12 +798,12 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
     anchor = None
     if cfg["show_text"]:
         # 左缘基准：文字紧跟封面右缘（随封面尺寸移动）；右缘基准：文字固定在槽位右端
-        tx = (cx + max_w if anchor == "right" else cover_x + cw) + int(h * 0.055) \
+        tx = (cx + max_w if anchor == "right" else cover_x + cw) + int(dim * 0.055) \
             + int(cfg.get("text_offset_x", 0) or 0)
         tw_max = w - tx - int(w * 0.06)
         # 单行硬上限：从文字起点到屏幕右缘留 2% 边距（吸收超它就放弃，绝不出屏）
         line_limit = max(tw_max, w - tx - int(w * 0.02))
-        if tw_max > h * 0.15:
+        if tw_max > w * 0.12:  # 门槛按宽度算（原按高度会把竖屏的窄文本区整个跳过）
             layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             draw = ImageDraw.Draw(layer)
             texts = {
@@ -827,7 +827,7 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                     continue
                 bold = bool(cfg.get(f"{g}_bold", g == "title"))
                 font, real_bold = _load_font(
-                    bold, int(h * float(cfg.get(f"{g}_size_ratio", 0.042) or 0.042)),
+                    bold, int(dim * float(cfg.get(f"{g}_size_ratio", 0.042) or 0.042)),
                     cfg.get(f"{g}_font_file"))
                 # 描边：用户设置的宽度优先；未设时走加粗降级链兜底（真实粗体无需描边，
                 # 重描边会把宋体类细横画肿掉，故兜底只有 1px）
@@ -845,9 +845,9 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                 blocks.append((g, lines, font, _hex_rgb(cfg.get(f"{g}_color"), (255, 255, 255)),
                                bool(cfg.get(f"{g}_shadow", True)), sw,
                                _hex_rgb(cfg.get(f"{g}_stroke_color"), (0, 0, 0))))
-            t_gap = int(h * cfg.get("title_line_gap_ratio", 0.012))   # 歌名折行间距
-            sub_gap = int(h * cfg.get("sub_line_gap_ratio", 0.014))   # 歌手/专辑折行与行间
-            t_sub_gap = int(h * cfg.get("title_sub_gap_ratio", 0.02))  # 歌名与副行间距
+            t_gap = int(dim * cfg.get("title_line_gap_ratio", 0.012))   # 歌名折行间距
+            sub_gap = int(dim * cfg.get("sub_line_gap_ratio", 0.014))   # 歌手/专辑折行与行间
+            t_sub_gap = int(dim * cfg.get("title_sub_gap_ratio", 0.02))  # 歌名与副行间距
 
             def _intra(g):
                 return t_gap if g == "title" else sub_gap
@@ -893,7 +893,7 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
     if paused and cfg.get("pause_mode") in ("badge", "both"):
         # 「已暂停」角标：屏幕右下角半透明圆角黑底白字（与 show_text 无关）
         d = ImageDraw.Draw(bg)
-        px = int(h * float(cfg.get("sub_size_ratio", 0.042) or 0.042))
+        px = int(dim * float(cfg.get("sub_size_ratio", 0.042) or 0.042))
         bfont, _ = _load_font(True, px, None)
         text = "已暂停"
         tw = _text_len(d, text, bfont)
@@ -957,7 +957,6 @@ def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors:
     targets = _filter_monitors(monitors, cfg.get("monitors", "all"))
     paths = []
     anchor = None
-    layers = []          # 新图（供失败回退用）
     for i, m in enumerate(targets):
         bg = _get_bg(cover_bytes, m["w"], m["h"], cfg)
         img, anchor_i = render_poster(cover_bytes, meta, m["w"], m["h"], cfg,
@@ -973,7 +972,6 @@ def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors:
             except OSError:
                 pass
         paths.append(path)
-        layers.append((m.get("left", 0), m.get("top", 0), m["w"], m["h"], img))
 
     for m, path in zip(targets, paths):
         dw.SetWallpaper(m["id"], path)

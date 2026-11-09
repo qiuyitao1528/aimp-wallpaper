@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import threading
 import urllib.parse
 import urllib.request
@@ -213,8 +214,8 @@ class LyricsWindow:
         self.s = (desktop.user32.GetDpiForSystem() or 96) / 96.0
         self.W = int(cfg.get("vis_width", 420) * self.s)
         # 字号按屏幕高比例（与其他文字键同口径），窗口高度按三行（原文/译文/下一行）自适应
-        self._px_cur = max(12, int(root.winfo_screenheight()
-                                   * float(cfg.get("lyrics_size_ratio", 0.032) or 0.032)))
+        _short = min(root.winfo_screenwidth(), root.winfo_screenheight())
+        self._px_cur = max(12, int(_short * float(cfg.get("lyrics_size_ratio", 0.032) or 0.032)))
         self._px_trans = max(10, int(self._px_cur * 0.62))
         self._px_next = max(10, int(self._px_cur * 0.72))
         self._gap = max(3, self._px_cur // 8)
@@ -365,9 +366,9 @@ class LyricsWindow:
     def _ensure_fonts(self):
         """按 cfg 里歌词字号/字体取当前行字体（样式热改时换新）。"""
         cfg = self.cfg
-        px = max(12, int((self.win.master.winfo_screenheight()
-                          if hasattr(self.win.master, "winfo_screenheight") else 1080)
-                         * float(cfg.get("lyrics_size_ratio", 0.032) or 0.032)))
+        _m = self.win.master
+        _short = min(_m.winfo_screenwidth(), _m.winfo_screenheight()) if hasattr(_m, "winfo_screenwidth") else 1080
+        px = max(12, int(_short * float(cfg.get("lyrics_size_ratio", 0.032) or 0.032)))
         fname = cfg.get("lyrics_font_file")
         key = (px, fname)
         if key != self._font_key:
