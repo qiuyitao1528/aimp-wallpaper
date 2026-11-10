@@ -477,6 +477,19 @@ def _scan_open(seg: str, pos0: int, cur_open: int) -> int:
     return cur_open
 
 
+def _is_break_space(ch: str) -> bool:
+    """可作为断行点的空白：ASCII 空格、全角空格(U+3000)、制表符等（不含换行）。"""
+    return ch == " " or ch == "\u3000" or ch == "\t"
+
+
+def _prev_space(text: str, start: int, end: int) -> int:
+    """在 text[start:end) 里从后往前找最后一个可断空白，返回其下标，找不到 -1。"""
+    for k in range(end - 1, start - 1, -1):
+        if _is_break_space(text[k]):
+            return k
+    return -1
+
+
 def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, bracket_break=False,
                 line_limit=None):
     """超宽处理：按像素宽度折行，最多 max_lines 行（默认 4），超限直接截断、无省略号——
@@ -521,6 +534,18 @@ def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, bracket_br
                     moved = True
                 # open_pos == line_start（组占满整行）→ 退回普通断行
             if not moved and space_window > 0:
+                # ① 优先断在本行最后一个空格（真正的按词换行，避免把单词切开）
+                back = _prev_space(text, line_start, i)
+                if back > line_start:
+                    tail = text[line_start:back]
+                    if _text_len(draw, tail.rstrip(), font) >= max_w * 0.3:  # 别把行留得太空
+                        cur = tail
+                        i = back + 1
+                        while i < n and _is_break_space(text[i]):
+                            i += 1
+                        moved = True
+                # ② 否则向后吸收到最近的空格（原有行为）
+            if not moved and space_window > 0:
                 j = text.find(" ", i, i + space_window)
                 if j >= 0 and _fits(text[line_start:j + 1]):
                     # 吸收到空格（含空格），在空格后直接换行（超 line_limit 则放弃）
@@ -534,7 +559,7 @@ def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, bracket_br
             open_pos = -1
             if len(lines) == max_lines:  # 达到行数上限：直接截断（换行模式无省略号）
                 break
-            while i < n and text[i] == " ":  # 断行后跳过前导空格（居中/右对齐会偏移）
+            while i < n and _is_break_space(text[i]):  # 断行后跳过前导空白（居中/右对齐会偏移）
                 i += 1
             line_start = i
         else:

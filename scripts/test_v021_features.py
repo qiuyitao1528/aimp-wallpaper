@@ -72,9 +72,17 @@ lines5 = wallpaper._wrap_title(draw, text, font, max_w, 2, space_window=2)
 print("wrap window=0:", ascii(lines0))
 print("wrap window=2:", ascii(lines5))
 check("wrap natural mid-word", lines0[1].startswith("b"), ascii(lines0))
-check("wrap space break", lines5[0] == "aaaa bb" and lines5[1] == "cc dd", ascii(lines5))
-# 首行吸收空格后允许超宽：确认 lines5[0] 宽度确实超过 max_w
-check("wrap overflow allowed", wallpaper._text_len(draw, lines5[0], font) > max_w)
+# 按词断行：断点回退到本行最后一个空格，不把单词切开
+check("wrap space break", lines5[0] == "aaaa" and lines5[1].startswith("bb"), ascii(lines5))
+check("word break no overflow", all(wallpaper._text_len(draw, ln, font) <= max_w for ln in lines5),
+      ascii(lines5))
+# 按词断行的典型效果：整句英文不出现在词中间断开
+t_en = "The Quick Brown Fox Jumps Over The Lazy Dog"
+w_en = wallpaper._text_len(draw, t_en[:len(t_en) // 2], font)
+en_lines = wallpaper._wrap_title(draw, t_en, font, w_en, 4, 5)
+en_words = set(t_en.split())
+check("english word wrapped", all(ln.strip() in t_en for ln in en_lines)
+      and all(w in t_en for ln in en_lines for w in ln.split()), ascii(en_lines))
 # 无空格可吸收时行为退化为普通断行
 lines_none = wallpaper._wrap_title(draw, "aaaaXXbbXXcc", font, max_w, 2, space_window=3)
 check("wrap no-space fallback", len(lines_none) == 2, ascii(lines_none))
@@ -116,7 +124,12 @@ ls = wallpaper._wrap_title(draw, "aaaa bbbbb ccc", font, (ws1 + ws2) / 2, 2,
                            space_window=10,
                            line_limit=wallpaper._text_len(draw, "aaaa bbbbb ", font) - 10)
 print("space guard:", ascii(ls))
-check("space absorb guarded", ls[0] == "aaaa bbbb", ascii(ls))
+check("space absorb guarded", ls[0] == "aaaa", ascii(ls))
+# 全角空格同样可断行
+t_fw = "第一段\u3000第二段\u3000第三段"
+w_fw = wallpaper._text_len(draw, "第一段\u3000第二", font)
+fw_lines = wallpaper._wrap_title(draw, t_fw, font, w_fw, 3, 5)
+check("fullwidth space break", fw_lines[0] in ("第一段", "第一段\u3000第二段"), ascii(fw_lines))
 # 真实事故：Cry For Me (feat. Ami) (为我哭泣) —— 括号吸收整组超屏幕预算 → 整组下移
 title_r = "Cry For Me (feat. Ami) (为我哭泣)"
 wr_a = wallpaper._text_len(draw, "Cry For Me (feat. Ami) (为我", font)
