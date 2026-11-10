@@ -457,9 +457,9 @@ def _ellipsis(draw, text, font, max_w):
 def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, line_limit=None):
     """按像素宽度折行（最多 max_lines 行），超限直接截断、无省略号。
 
-    space_window>0：折行点之后 space_window 个字符内有空格时，断点移到该空格后
-    （首行允许轻微超宽，避免把短词组切碎）；0 = 纯按宽度折行。
-    line_limit：单行硬宽度上限（通常 = 文字起点到屏幕右缘的预算），吸收后超限则放弃吸收。
+    space_window>0：折行点**之前** space_window 个字符内有空格时，把断点前移到该空格之后
+    （避免把单词/词组切开）；找不到则按宽度直接断。0 = 纯按宽度折行。
+    line_limit：单行硬宽度上限（通常 = 文字起点到屏幕右缘的预算），用于兜底防越界。
     """
     if max_lines <= 1:
         return [_ellipsis(draw, text, font, max_w)]
@@ -472,11 +472,17 @@ def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, line_limit
         ch = text[i]
         if cur and _text_len(draw, cur + ch, font) > max_w:
             if space_window > 0:
-                j = text.find(" ", i, i + space_window)
-                if j >= 0 and (line_limit is None
-                               or _text_len(draw, text[line_start:j + 1], font) <= line_limit):
-                    cur += text[i:j + 1]  # 吸收到空格（含空格），在空格后直接换行
-                    i = j + 1
+                # 折行点**之前** N 个字符内找最后一个空格，断在该空格之后（单词不被切开）
+                back = -1
+                for k in range(i - 1, max(line_start, i - space_window) - 1, -1):
+                    if text[k] == " ":
+                        back = k
+                        break
+                if back > line_start:
+                    cur = text[line_start:back]
+                    i = back + 1
+                    while i < n and text[i] == " ":
+                        i += 1
             lines.append(cur.rstrip())
             cur = ""
             if len(lines) == max_lines:  # 达到行数上限：直接截断（换行模式无省略号）

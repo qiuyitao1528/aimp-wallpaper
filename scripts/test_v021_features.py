@@ -72,9 +72,17 @@ lines5 = wallpaper._wrap_title(draw, text, font, max_w, 2, space_window=2)
 print("wrap window=0:", ascii(lines0))
 print("wrap window=2:", ascii(lines5))
 check("wrap natural mid-word", lines0[1].startswith("b"), ascii(lines0))
-# 空格断行：折行点后 N 字符内有空格则吸收到空格后（首行允许轻微超宽）
-check("wrap space break", lines5[0] == "aaaa bb" and lines5[1].startswith("cc"), ascii(lines5))
-check("space absorb wider ok", wallpaper._text_len(draw, lines5[0], font) > max_w, ascii(lines5))
+# 空格断行：折行点**之前** N 字符内有空格则断在该空格后（单词不被切开）
+check("wrap space break", lines5[0] == "aaaa" and lines5[1].startswith("bb"), ascii(lines5))
+check("space break within width", all(wallpaper._text_len(draw, ln, font) <= max_w for ln in lines5),
+      ascii(lines5))
+# 典型效果：英文整句按词断开，不出现词中断
+t_en = "The Quick Brown Fox Jumps Over The Lazy Dog"
+w_en = wallpaper._text_len(draw, t_en[:len(t_en) // 2], font)
+en_lines = wallpaper._wrap_title(draw, t_en, font, w_en, 4, 5)
+check("english word break", all(ln.split() == ln.split() and not any(
+      w not in t_en for w in ln.split()) for ln in en_lines)
+      and all(ln.strip() in t_en for ln in en_lines), ascii(en_lines))
 # 无空格可吸收时退化为普通按宽度断行
 lines_none = wallpaper._wrap_title(draw, "aaaaXXbbXXcc", font, max_w, 2, space_window=3)
 check("wrap no-space fallback", len(lines_none) == 2, ascii(lines_none))
@@ -87,7 +95,10 @@ ls = wallpaper._wrap_title(draw, "aaaa bbbbb ccc", font, (ws1 + ws2) / 2, 2,
                            space_window=10,
                            line_limit=wallpaper._text_len(draw, "aaaa bbbbb ", font) - 10)
 print("space guard:", ascii(ls))
-check("space absorb guarded", ls[0] == "aaaa bbbb", ascii(ls))
+check("space break guarded", ls[0] == "aaaa", ascii(ls))
+# 超过窗口距离的空格不生效（window=2 时 3 个字符外的空格不算）
+far = wallpaper._wrap_title(draw, "aaaa bbbbb", font, wallpaper._text_len(draw, "aaaa bb", font), 2, 2)
+check("window limited", far[0] != "aaaa", ascii(far))
 # 实际事故回归：长标题折行后任何行都不越屏幕预算
 title_r = "Cry For Me (feat. Ami) (为我哭泣)"
 wr = wallpaper._text_len(draw, "Cry For Me (feat.", font)
