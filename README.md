@@ -7,7 +7,7 @@
 基于 AIMP 自带 Remote API，将正在播放曲目的封面与元数据实时渲染为海报式桌面壁纸，附带经典频谱可视化面板与桌面歌词。无需安装任何 AIMP 插件，支持 Windows 10 / 11。
 
 [![Release](https://img.shields.io/github/v/release/qiuyitao1528/aimp-wallpaper?style=flat-square&color=4C8BF5)](https://github.com/qiuyitao1528/aimp-wallpaper/releases/latest)
-[![Stable](https://img.shields.io/badge/stable-v1.0.0-2EA043?style=flat-square)](https://github.com/qiuyitao1528/aimp-wallpaper/releases/tag/v1.0.0)
+[![Pre-release](https://img.shields.io/badge/pre--release-0.9.0--beta.1-FB8C00?style=flat-square)](https://github.com/qiuyitao1528/aimp-wallpaper/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows)](https://github.com/qiuyitao1528/aimp-wallpaper)
 [![Python](https://img.shields.io/badge/python-3.12+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/github/license/qiuyitao1528/aimp-wallpaper?style=flat-square&color=3DA639)](LICENSE)
@@ -49,7 +49,7 @@
 
 | 形式 | 文件 | 特点 |
 |---|---|---|
-| 安装版 | `aimp-wallpaper-vX.Y.Z-setup.exe` | 免管理员安装至当前用户，含开始菜单快捷方式，支持卸载时自动恢复原壁纸 |
+| 安装版 | `aimp-wallpaper-vX.Y.Z[-tag]-setup.exe` | 免管理员安装至当前用户，含开始菜单快捷方式，支持卸载时自动恢复原壁纸 |
 | 绿色版 | `aimp-wallpaper-vX.Y.Z-win64.zip` | 解压即用，不写注册表，配置随目录保存，适合便携使用 |
 
 ---
