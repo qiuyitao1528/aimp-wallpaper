@@ -696,19 +696,31 @@ def _audio_info(path: str, duration_ms, samplerate=0, file_size=0, bit_rate=0) -
     return vals
 
 
+_INFO_SEP = "·|/,;:—-"  # 分隔符集合（- 必须放最后，否则正则里会被当作字符范围）
+
+
 def _format_info(cfg: dict, meta: dict) -> str:
-    """按 info_template 渲染歌曲信息行；四值全未知时返回空串（整行隐藏）。"""
+    """按 info_template 渲染歌曲信息行。
+
+    缺失项（值为「—」）**整段省略**而非占位显示，并清理因此产生的多余分隔符
+    （如 `FLAC · · 24 bit` → `FLAC · 24 bit`）；若所有项都缺失则返回空串（整行隐藏）。
+    """
     vals = _audio_info(meta.get("filename") or "", meta.get("duration_ms"),
                        meta.get("samplerate") or 0, meta.get("file_size") or 0,
                        meta.get("bit_rate") or 0)
     out = str(cfg.get("info_template", "{format} {samplerate} {bitrate} {bits}"))
     for k, v in vals.items():
-        out = out.replace("{" + k + "}", v)
-    out = re.sub(r"\{[a-z_]+\}", "", out)  # 未识别 token 直接剥掉
-    out = re.sub(r"\s+", " ", out).strip()
-    if out in ("", "—", "— — — —"):
-        return ""
-    return out
+        out = out.replace("{" + k + "}", "" if v == "—" else v)
+    out = re.sub(r"\{[a-z_]+\}", "", out)       # 未识别 token 直接剥掉
+
+    def _tidy(t: str) -> str:
+        t = re.sub(r"\s+", " ", t)
+        # 连续/孤立/首尾分隔符清理（「MP3 ·  · 24 bit」→「MP3 · 24 bit」）
+        t = re.sub(r"([ \t]*[" + _INFO_SEP + r"][ \t]*){2,}", " · ", t)
+        t = re.sub(r"^[ \t]*[" + _INFO_SEP + r"][ \t]*|([ \t]*[" + _INFO_SEP + r"])+[ \t]*$", "", t)
+        return t.strip()
+
+    return _tidy(out)
 
 
 def _anchor_cx(anchor: str, cx: int, slot_w: int, cw: int) -> int:

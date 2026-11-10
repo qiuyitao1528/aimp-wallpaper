@@ -581,6 +581,14 @@ check("info template render", info_line == "FLAC 48 kHz 1796 kbps 24 bit", ascii
 # 未知文件 → 全 — → 整行隐藏
 meta_u = {"title": "t", "artist": "a", "album": "al", "filename": "http://stream/x", "duration_ms": 0}
 check("info unknown hidden", _format_info(cfg_i, meta_u) == "")
+# 缺失项省略而不显示「—」（有损格式无位深）
+meta_mp3 = {"title": "t", "artist": "a", "album": "a", "filename": "x.mp3",
+            "duration_ms": 245872, "samplerate": 44100, "bit_rate": 320}
+line_mp3 = _format_info({**cfg_i, "info_template": "{format} {samplerate} {bitrate} {bits}"}, meta_mp3)
+check("missing field omitted", line_mp3 == "MP3 44.1 kHz 320 kbps", ascii(line_mp3))
+check("no dash anywhere", "—" not in line_mp3, ascii(line_mp3))
+line_sep = _format_info({**cfg_i, "info_template": "{format} | {bits}"}, meta_mp3)
+check("dangling separator removed", line_sep == "MP3", ascii(line_sep))
 # 自定义模板 + {duration}
 cfg_i2 = {**cfg_i, "info_template": "{format} {duration}"}
 check("info custom template", _format_info(cfg_i2, meta_i) == "FLAC 1:00", ascii(_format_info(cfg_i2, meta_i)))
