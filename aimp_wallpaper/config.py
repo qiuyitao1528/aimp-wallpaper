@@ -36,7 +36,7 @@ DEFAULTS = {
     "theme_night_follow": False,  # 跟随系统日/夜主题（深色主题叠黑色遮罩）
     "night_overlay": 30,        # 夜间黑色遮罩浓度（%）
     "cover_height_ratio": 0.56, # 无封面占位框占屏高比例（内部几何，不暴露）
-    "cover_margin_ratio": 0.12, # 封面左边距占屏高比例（内部几何，不暴露）
+    "cover_margin_ratio": 0.12, # 封面左边距占屏高比例（GUI 可调）
     "cover_offset_x": 0,        # 封面 X 偏移(像素，可为负)
     "cover_offset_y": 0,        # 封面 Y 偏移(像素，可为负)
     "cover_scale": 1.0,         # 封面大小倍率 0.3~2.0
@@ -108,6 +108,9 @@ DEFAULTS = {
     "info_space_window": 0,     # 歌曲信息空格断行窗口（信息行短，默认关）
     # 歌词悬浮窗（样式与壁纸歌名行同源，迁移时从 title_* 播种）
     "lyrics_hidden": False,     # True=隐藏歌词窗
+    "lyrics_follow": "panel",   # 跟随目标 panel=频谱面板 / anchor=壁纸文字区 / fixed=屏幕右下固定
+    "lyrics_show_next": True,   # 显示下一行（False=仅当前行，可含译文）
+    "lyrics_width": 420,        # 歌词窗宽度（px，重启生效）
     "lyrics_locked": False,     # 锁定=禁拖动（仍跟随锚点）
     "lyrics_pos": None,         # 手动定位 [x, y]（拖过后粘滞）
     "lyrics_font_file": None,   # 歌词字体（None=默认雅黑加粗）

@@ -33,6 +33,10 @@ SPACE_WRAP_ITEMS = [("关", "0"), ("2", "2"), ("3", "3"), ("4", "4"),
                     ("5", "5"), ("6", "6"), ("8", "8"), ("10", "10")]
 STROKE_CHOICES = [0, 1, 2, 3, 4, 6]
 COVER_STROKE_CHOICES = [0, 1, 2, 3, 4, 6, 8]
+LYRICS_MODE_ITEMS = [("当前行+下一行", "both"), ("仅当前行", "current")]
+LYRICS_FOLLOW_ITEMS = [("跟随频谱面板", "panel"), ("跟随壁纸文字区", "anchor"), ("屏幕右下固定", "fixed")]
+LYRICS_WIDTH_CHOICES = [280, 320, 420, 520, 640]
+MARGIN_CHOICES = [4, 8, 10, 12, 16, 20, 24]
 LINE_ITEMS = (("title", "歌名"), ("artist", "歌手"), ("album", "专辑"), ("info", "歌曲信息"))
 FONTS_FALLBACK = [
     ("微软雅黑（默认）", "msyhbd.ttc"), ("微软雅黑 常规", "msyh.ttc"), ("微软雅黑 Light", "msyhl.ttc"),
@@ -201,6 +205,9 @@ class SettingsWindow:
                                   int(cfg.get("cover_offset_x", 0) or 0))
         self.cover_dy_var = combo(pg, "封面 Y 偏移(像素)", OFFSET_CHOICES,
                                   int(cfg.get("cover_offset_y", 0) or 0))
+        self.cover_margin_var = combo(pg, "封面左边距(%)", MARGIN_CHOICES,
+                                      round(float(cfg.get("cover_margin_ratio", 0.12) or 0.12) * 100),
+                                      readonly=True)
         self.cover_radius_var = labeled(pg, "封面圆角(像素)", COVER_RADIUS_ITEMS,
                                         int(cfg.get("cover_radius", 0) or 0))
         self.cover_sa_var = combo(pg, "封面阴影浓度", SHADOW_ALPHA_CHOICES,
@@ -267,9 +274,19 @@ class SettingsWindow:
         # ---------------- 面板（频谱 + 歌词） ----------------
         pg = self._pages["面板"]
         self.vis_show_var = check(pg, "显示频谱面板", not cfg.get("vis_hidden", False))
+        self.vis_w_var = combo(pg, "面板宽度(像素)", [280, 320, 420, 520, 640],
+                               int(cfg.get("vis_width", 420) or 420), readonly=True)
+        self.vis_h_var = combo(pg, "面板高度(像素)", [80, 100, 120, 160, 200],
+                               int(cfg.get("vis_height", 120) or 120), readonly=True)
         self.fps_var = combo(pg, "刷新率(FPS)", FPS_CHOICES, int(cfg.get("vis_fps", 30) or 30))
         self.lock_var = check(pg, "锁定频谱面板（禁拖动，仍跟随壁纸）", cfg.get("vis_locked"))
-        self.lyr_show_var = check(pg, "显示歌词（跟随频谱面板）", not cfg.get("lyrics_hidden", False))
+        self.lyr_show_var = check(pg, "显示歌词", not cfg.get("lyrics_hidden", False))
+        self.lyr_mode_var = labeled(pg, "歌词显示", LYRICS_MODE_ITEMS,
+                                    "both" if cfg.get("lyrics_show_next", True) else "current")
+        self.lyr_follow_var = labeled(pg, "歌词跟随", LYRICS_FOLLOW_ITEMS,
+                                      cfg.get("lyrics_follow", "panel"))
+        self.lyr_w_var = combo(pg, "歌词窗宽度(像素)", LYRICS_WIDTH_CHOICES,
+                               int(cfg.get("lyrics_width", 420) or 420), readonly=True)
         self.lyr_lock_var = check(pg, "锁定歌词窗（禁拖动，仍跟随壁纸）", cfg.get("lyrics_locked", False))
         self.lyr_font_var = combo(pg, "歌词字体",
                                   [self._default_label] + [lb for lb, _ in self._fonts],
@@ -425,6 +442,11 @@ class SettingsWindow:
         self.cfg["cover_anchor"] = dict(COVER_ANCHOR_ITEMS).get(self.cover_anchor_var.get(), "left")
         self._int(self.cover_dx_var, "cover_offset_x", -2000, 2000, label="封面 X 偏移")
         self._int(self.cover_dy_var, "cover_offset_y", -2000, 2000, label="封面 Y 偏移")
+        try:
+            mpct = max(2, min(30, int(str(self.cover_margin_var.get()).strip())))
+            self.cfg["cover_margin_ratio"] = mpct / 100
+        except (TypeError, ValueError):
+            self._invalid.append("封面左边距")
         for key, v in self._line_vars.items():
             zh = dict(LINE_ITEMS)[key]
             self._int(v["size"], f"{key}_size_ratio", 8, self.screen_short, ratio=True, label=f"{zh}字号")
@@ -461,6 +483,11 @@ class SettingsWindow:
         self.cfg["text_valign"] = dict(VALIGN_ITEMS).get(self.text_valign_var.get(), "center")
         self.cfg["vis_locked"] = self.lock_var.get()
         self.cfg["vis_hidden"] = not self.vis_show_var.get()
+        self._int(self.vis_w_var, "vis_width", 200, 1000, label="面板宽度")
+        self._int(self.vis_h_var, "vis_height", 60, 400, label="面板高度")
+        self.cfg["lyrics_show_next"] = dict(LYRICS_MODE_ITEMS).get(self.lyr_mode_var.get(), "both") == "both"
+        self.cfg["lyrics_follow"] = dict(LYRICS_FOLLOW_ITEMS).get(self.lyr_follow_var.get(), "panel")
+        self._int(self.lyr_w_var, "lyrics_width", 200, 1000, label="歌词窗宽度")
         self.cfg["restore_on_quit"] = self.restore_var.get()
         config.save(self.cfg)
 

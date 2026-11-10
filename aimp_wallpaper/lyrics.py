@@ -212,7 +212,7 @@ class LyricsWindow:
         self.ipc = ipc
         self.get_panel_pos = get_panel_pos  # () -> (x, y) | None（面板不可见时 None）
         self.s = (desktop.user32.GetDpiForSystem() or 96) / 96.0
-        self.W = int(cfg.get("vis_width", 420) * self.s)
+        self.W = int(cfg.get("lyrics_width", 420) * self.s)
         # 字号按屏幕高比例（与其他文字键同口径），窗口高度按三行（原文/译文/下一行）自适应
         _short = min(root.winfo_screenwidth(), root.winfo_screenheight())
         self._px_cur = max(12, int(_short * float(cfg.get("lyrics_size_ratio", 0.032) or 0.032)))
@@ -268,12 +268,40 @@ class LyricsWindow:
 
     # ---------- 位置 ----------
 
+    def _anchor_pos(self):
+        """跟随壁纸排版：读渲染锚点（文字块底部），mtime 未变时走缓存。失败返回 None。"""
+        p = os.path.join(self.cfg["output_dir"], "vis_anchor.json")
+        try:
+            mtime = os.stat(p).st_mtime
+        except OSError:
+            return None
+        if mtime == getattr(self, "_anchor_mtime", 0):
+            return getattr(self, "_anchor_cache", None)
+        pos = None
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            pos = (int(d["x"]), int(d["y"]))
+        except (OSError, ValueError, KeyError):
+            pos = None
+        self._anchor_mtime = mtime
+        self._anchor_cache = pos
+        return pos
+
     def _target_pos(self):
         if self.cfg.get("lyrics_pos"):
             return tuple(self.cfg["lyrics_pos"])
-        panel_pos = self.get_panel_pos()
-        if panel_pos:
-            return (panel_pos[0] + int(6 * self.s), panel_pos[1] + self.H_panel() + int(6 * self.s))
+        mode = self.cfg.get("lyrics_follow", "panel")
+        if mode == "anchor":  # 跟随壁纸文字区（即使面板隐藏也贴着文字块底部）
+            pos = self._anchor_pos()
+            if pos:
+                return (pos[0] + int(6 * self.s), pos[1] + int(6 * self.s))
+        elif mode == "fixed":  # 固定屏幕右下，不跟随
+            pass
+        else:  # panel：跟随频谱面板（默认）
+            panel_pos = self.get_panel_pos()
+            if panel_pos:
+                return (panel_pos[0] + int(6 * self.s), panel_pos[1] + self.H_panel() + int(6 * self.s))
         wa_l, wa_t, wa_r, wa_b = desktop.work_area()
         return (wa_r - self.W - int(24 * self.s), wa_b - self.H - int(120 * self.s))
 
@@ -417,7 +445,7 @@ class LyricsWindow:
             rows.append((self._font_cur, cur, (*cur_rgb, 255), sw))
         if cur_tr:
             rows.append((self._font_trans, cur_tr, (*nxt_rgb, 205), max(0, sw - 1)))
-        if nxt:
+        if nxt and self.cfg.get("lyrics_show_next", True):
             rows.append((self._font_next, nxt, (*nxt_rgb, 190), max(0, sw - 1)))
         total = sum(f.size for f, *_r in rows) + self._gap * (len(rows) - 1)
         y = (self.H - total) // 2
