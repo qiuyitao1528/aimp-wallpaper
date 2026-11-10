@@ -561,10 +561,13 @@ with open(flac_path, "wb") as f:
     f.write(flac)
     f.truncate(flac_size)
 info = _audio_info(flac_path, 60000)  # 无 AIMP 值 → 全走文件头
-info_aimp = _audio_info("", 60000, samplerate=48000, file_size=flac_size)  # AIMP 直读路径
+info_aimp = _audio_info("", 60000, samplerate=48000, file_size=flac_size, bit_rate=1796)  # AIMP 直读路径
 check("aimp-first samplerate", info_aimp["samplerate"] == "48 kHz", info_aimp["samplerate"])
 check("aimp-first bitrate", info_aimp["bitrate"] == "1796 kbps", info_aimp["bitrate"])
 check("aimp-first no bits w/o path", info_aimp["bits"] == "—", info_aimp["bits"])
+check("aimp bit_rate wins", _audio_info("", 60000, 48000, 10**9, 320)["bitrate"] == "320 kbps",
+      _audio_info("", 60000, 48000, 10**9, 320)["bitrate"])
+check("bit_rate fallback to size", _audio_info("", 60000, 48000, flac_size, 0)["bitrate"] == "1796 kbps")
 check("flac format", info["format"] == "FLAC", info["format"])
 check("flac samplerate", info["samplerate"] == "48 kHz", info["samplerate"])
 check("flac bits", info["bits"] == "24 bit", info["bits"])

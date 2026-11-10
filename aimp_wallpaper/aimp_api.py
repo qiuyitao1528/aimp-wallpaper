@@ -4,7 +4,7 @@
 - FindWindow("AIMP2_RemoteInfo") 取 AIMP 消息窗口
 - WM_AIMP_COMMAND = WM_USER+0x75（命令），WM_AIMP_PROPERTY = WM_USER+0x77（属性 GET/SET）
 - 共享内存映射名 AIMP2_RemoteInfo，2048 字节：
-  0x00=字符串区起始偏移(0x58)，0x10=时长ms，0x20=采样率，
+  0x00=字符串区起始偏移(0x58)，0x08=比特率kbps，0x0C=声道，0x10=时长ms，0x20=采样率，
   0x28 起依次 Album/Artist/Date/FileName/Genre/Title 的字符长度（WCHAR 个数），
   0x58 起按同样顺序紧凑排 UTF-16LE（无终止符）
 - 封面：CMD_GET_ALBUMART(29) 且 lParam=接收窗口 → AIMP 回 WM_COPYDATA（dwData=0x41495043，lpData=图片字节流）
@@ -131,10 +131,16 @@ def parse_fileinfo(data: bytes) -> dict | None:
             n = 0
         out[key] = _clean_text(data[pos:pos + n * 2].decode("utf-16-le", errors="replace").rstrip("\x00")) if n else ""
         pos += n * 2
-    # 音频参数（AIMP 直读）：0x10=时长ms，0x14=文件大小字节，0x20=采样率Hz
-    out["duration_ms"] = int.from_bytes(data[0x10:0x14], "little")
-    out["file_size"] = int.from_bytes(data[0x14:0x18], "little")
-    out["samplerate"] = int.from_bytes(data[0x20:0x24], "little")
+    # 音频参数（AIMP 直读，字段偏移按官方 AIMPRemoteAccess 结构校准）：
+    #   0x04=Active  0x08=BitRate(kbps)  0x0C=Channels  0x10=Duration(ms)
+    #   0x14=FileSize(bytes)  0x20=SampleRate(Hz)  0x24=TrackNumber
+    u32 = lambda off: int.from_bytes(data[off:off + 4], "little")
+    out["bit_rate"] = u32(0x08)
+    out["channels"] = u32(0x0C)
+    out["duration_ms"] = u32(0x10)
+    out["file_size"] = u32(0x14)
+    out["samplerate"] = u32(0x20)
+    out["track_number"] = u32(0x24)
     return out
 
 
@@ -152,7 +158,7 @@ class AimpIPC(threading.Thread):
         self._snap = {
             "connected": False, "state": STATE_NO_AIMP,
             "position_ms": 0, "duration_ms": 0, "volume": 0,
-            "file_size": 0, "samplerate": 0,
+            "file_size": 0, "samplerate": 0, "bit_rate": 0, "channels": 0,
             "title": "", "artist": "", "album": "", "filename": "",
             "cover_gen": 0,
         }
@@ -275,6 +281,8 @@ class AimpIPC(threading.Thread):
                 # 音频参数直接取 AIMP（不经文件头解析，网络/移动盘也准）
                 "file_size": info.get("file_size") or 0,
                 "samplerate": info.get("samplerate") or 0,
+                "bit_rate": info.get("bit_rate") or 0,
+                "channels": info.get("channels") or 0,
             })
             if info.get("duration_ms"):
                 self._snap["duration_ms"] = info["duration_ms"]
