@@ -32,6 +32,7 @@ DEFAULTS = {
     "blur_type": "gauss",       # 模糊类型 gauss/soft/fog/glow（高斯系四变体，blur 类方案下生效）
     "blur_radius": 28,          # 背景模糊半径（各模糊类型共用的强度基准）
     "darken": 0.75,             # 背景压暗系数 0~1
+    "fade_native": True,       # 换壁纸过渡：用 Windows 原生淡入（幻灯片引擎武装）
     "theme_night_follow": False,  # 跟随系统日/夜主题（深色主题叠黑色遮罩）
     "night_overlay": 30,        # 夜间黑色遮罩浓度（%）
     "cover_height_ratio": 0.56, # 无封面占位框占屏高比例

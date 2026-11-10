@@ -658,5 +658,17 @@ img_miss_b = wallpaper.render_poster(
 check("missing keys appended", np.abs(arr(img_miss_a) - arr(img_miss_b)).sum() > 0)
 
 print()
+
+# ---------- M. 原生壁纸过渡 ----------
+from aimp_wallpaper.wallpaper import _next_slot  # noqa: E402
+
+slots = [_next_slot() for _ in range(4)]
+check("wallpaper slot alternates", all(a != b for a, b in zip(slots, slots[1:])) and set(slots) <= {"A", "B"},
+      str(slots))
+check("fade_native default on", config.DEFAULTS.get("fade_native") is True)
+check("slideshow vtable declared", hasattr(wallpaper, "_arm_native_fade")
+      and hasattr(wallpaper, "_shell_item_array"))
+
+print()
 print("RESULT:", "ALL_PASS" if not FAILS else f"FAILED={FAILS}")
 sys.exit(1 if FAILS else 0)

@@ -158,6 +158,8 @@ class SettingsWindow:
         self.bg_style_var = labeled(pg, "背景方案", BG_CHOICES, cfg.get("bg_style", "blur"))
         self.blur_type_var = labeled(pg, "模糊类型", BLUR_TYPE_ITEMS, cfg.get("blur_type", "gauss"))
         self.blur_var = combo(pg, "模糊强度(像素)", BLUR_CHOICES, int(cfg.get("blur_radius", 28)))
+        self.fade_native_var = check(pg, "壁纸过渡（Windows 原生淡入；系统本身已有过渡可关闭）",
+                                      cfg.get("fade_native", True))
         self.night_var = check(pg, "跟随系统日/夜主题（夜间叠黑色遮罩）",
                                cfg.get("theme_night_follow", False))
         self.night_alpha_var = combo(pg, "夜间遮罩浓度(%)", NIGHT_ALPHA_CHOICES,
@@ -339,6 +341,7 @@ class SettingsWindow:
         self._int(self.blur_var, "blur_radius", 4, 200)
         self.cfg["theme_night_follow"] = self.night_var.get()
         self._int(self.night_alpha_var, "night_overlay", 0, 95)
+        self.cfg["fade_native"] = self.fade_native_var.get()
         self.cfg["cover_radius"] = dict(COVER_RADIUS_ITEMS).get(self.cover_radius_var.get(), 0)
         self._int(self.cover_sa_var, "cover_shadow_alpha", 0, 255)
         self._int(self.cover_so_var, "cover_shadow_offset", 0, 300)

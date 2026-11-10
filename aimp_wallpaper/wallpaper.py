@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import ctypes
 import io
 import json
 import os
@@ -50,11 +51,100 @@ class IDesktopWallpaper(IUnknown):
                   (["in"], wintypes.DWORD, "position")),
         COMMETHOD([], HRESULT, "GetPosition",
                   (["out"], POINTER(wintypes.DWORD), "position")),
+        # 幻灯片相关：explorer 的壁纸过渡只在"幻灯片引擎"激活时发生
+        # （实测：图片模式下 SetWallpaper 硬切 0 中间帧；幻灯片模式下同一调用 700ms 淡入）
+        COMMETHOD([], HRESULT, "SetSlideshow", (["in"], ctypes.c_void_p, "items")),
+        COMMETHOD([], HRESULT, "GetSlideshow", (["out"], POINTER(ctypes.c_void_p), "items")),
+        COMMETHOD([], HRESULT, "SetSlideshowOptions",
+                  (["in"], ctypes.c_int, "options"),
+                  (["in"], wintypes.UINT, "slideshowTick")),
+        COMMETHOD([], HRESULT, "GetSlideshowOptions",
+                  (["out"], POINTER(ctypes.c_int), "options"),
+                  (["out"], POINTER(wintypes.UINT), "slideshowTick")),
+        COMMETHOD([], HRESULT, "AdvanceSlideshow",
+                  (["in"], wintypes.LPCWSTR, "monitorID"), (["in"], ctypes.c_int, "direction")),
+        COMMETHOD([], HRESULT, "GetStatus", (["out"], POINTER(ctypes.c_int), "state")),
     ]
+
+
+_shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+_ole32 = ctypes.WinDLL("ole32", use_last_error=True)
+_shell32.SHParseDisplayName.argtypes = [wintypes.LPCWSTR, ctypes.c_void_p,
+                                        POINTER(ctypes.c_void_p), wintypes.DWORD,
+                                        POINTER(wintypes.DWORD)]
+_shell32.SHParseDisplayName.restype = ctypes.c_long
+_shell32.SHCreateShellItemArrayFromIDLists.argtypes = [wintypes.UINT,
+                                                       POINTER(ctypes.c_void_p),
+                                                       POINTER(ctypes.c_void_p)]
+_shell32.SHCreateShellItemArrayFromIDLists.restype = ctypes.c_long
+_ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+
+
+def _shell_item_array(paths: list[str]):
+    """文件路径列表 → IShellItemArray*（调用方负责 _com_release）。失败返回 None。"""
+    pidls, attrs = [], wintypes.DWORD()
+    for p in paths:
+        pidl = ctypes.c_void_p()
+        if _shell32.SHParseDisplayName(str(p), None, ctypes.byref(pidl), 0,
+                                       ctypes.byref(attrs)) != 0 or not pidl.value:
+            for done in pidls:
+                _ole32.CoTaskMemFree(done)
+            return None
+        pidls.append(pidl)
+    try:
+        arr = (ctypes.c_void_p * len(pidls))(*[p.value for p in pidls])
+        out = ctypes.c_void_p()
+        if _shell32.SHCreateShellItemArrayFromIDLists(len(pidls), arr, ctypes.byref(out)) != 0:
+            return None
+        return out
+    finally:
+        for done in pidls:
+            _ole32.CoTaskMemFree(done)
+
+
+def _com_release(ptr) -> None:
+    """释放 COM 指针（vtable 第 3 个槽位 = Release）。"""
+    try:
+        vtbl = ctypes.cast(ptr, POINTER(POINTER(ctypes.c_void_p))).contents
+        release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vtbl[2])
+        release(ptr)
+    except Exception:
+        pass
+
+
+def _arm_native_fade(dw, old_paths: list[str]) -> bool:
+    """把背景临时武装为「只含当前壁纸」的幻灯片（超长间隔）。
+
+    这样紧接着的 SetWallpaper 会走 explorer 的幻灯片过渡引擎 → 原生交叉淡化。
+    不改变用户看到的背景模式（BackgroundType 仍为「图片」），也不产生可见变化。
+    """
+    files = [p for p in old_paths if p and os.path.isfile(p)]
+    if not files:
+        return False
+    arr = _shell_item_array(files)
+    if not arr:
+        return False
+    try:
+        dw.SetSlideshowOptions(0, 86400)  # DEFAULT（保留淡入动画）+ 超长切换间隔
+        dw.SetSlideshow(arr)
+        return True
+    except Exception:
+        return False
+    finally:
+        _com_release(arr)
 
 
 def _get_wallpaper_com():
     return comtypes.CoCreateInstance(CLSID_DesktopWallpaper, interface=IDesktopWallpaper)
+
+
+_SLOT = {"i": 0}
+
+
+def _next_slot() -> str:
+    """输出文件名槽位 A/B 交替：避免新旧壁纸同路径（同路径 explorer 不做过渡）。"""
+    _SLOT["i"] ^= 1
+    return "A" if _SLOT["i"] else "B"
 
 
 _MON_CACHE: tuple | None = None
@@ -923,9 +1013,10 @@ def _get_bg(cover_bytes: bytes | None, w: int, h: int, cfg: dict) -> Image.Image
 
 
 def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors: list[dict],
-                     paused: bool = False) -> list[str]:
+                     paused: bool = False, fade: bool | None = None) -> list[str]:
     """逐屏渲染并设置；PNG 输出避免 JPEG 压缩发虚（compress_level=1 提速编码）。
-    首屏锚点（专辑行位置）写盘供可视化面板跟随。paused=按 pause_mode 叠加暂停反馈。"""
+    首屏锚点（专辑行位置）写盘供可视化面板跟随。paused=按 pause_mode 叠加暂停反馈。
+    fade=True/False 强制过渡开关；None=按配置 fade_native（仅切歌时由调用方传 True）。"""
     out_dir = cfg["output_dir"]
     os.makedirs(out_dir, exist_ok=True)
     dw = _get_wallpaper_com()
@@ -938,19 +1029,36 @@ def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors:
                                       want_anchor=True, bg=bg, paused=paused)
         if i == 0:
             anchor = anchor_i
-        path = os.path.join(out_dir, f"wallpaper_{m['w']}x{m['h']}.png")
+        path = os.path.join(out_dir, f"wallpaper_{m['w']}x{m['h']}_{_next_slot()}.png")
         img.save(path, "PNG", optimize=False, compress_level=1)
-        jpg = os.path.join(out_dir, f"wallpaper_{m['w']}x{m['h']}.jpg")
-        if os.path.exists(jpg):
+        legacy = os.path.join(out_dir, f"wallpaper_{m['w']}x{m['h']}.jpg")
+        if os.path.exists(legacy):
             try:
-                os.remove(jpg)
+                os.remove(legacy)
             except OSError:
                 pass
         paths.append(path)
 
+    # 原生过渡：先武装幻灯片引擎，随后的 SetWallpaper 才会带 explorer 的淡入动画
+    use_fade = cfg.get("fade_native", True) if fade is None else bool(fade)
+    if use_fade:
+        olds = []
+        for m in targets:
+            try:
+                olds.append(dw.GetWallpaper(m["id"]))
+            except Exception:
+                pass
+        _arm_native_fade(dw, olds)
     for m, path in zip(targets, paths):
         dw.SetWallpaper(m["id"], path)
-    dw.SetPosition(DWPOS_FILL)
+    try:  # 已经是 FILL 就不再重复设置：SetPosition 会触发重新应用，打断淡入
+        if dw.GetPosition() != DWPOS_FILL:
+            dw.SetPosition(DWPOS_FILL)
+    except Exception:
+        dw.SetPosition(DWPOS_FILL)
+    if use_fade:
+        # 立刻把「这次设置的图」武装成幻灯片池：下一次 SetWallpaper 时 explorer 就会淡入
+        _arm_native_fade(dw, paths)
     # 可视化面板锚点：屏幕坐标（主屏文字区左缘、专辑行底部下方留一点空隙）
     if anchor and targets:
         m0 = targets[0]

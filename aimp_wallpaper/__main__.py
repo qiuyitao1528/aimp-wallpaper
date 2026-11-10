@@ -52,6 +52,7 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
             # 暂停反馈在渲染时实时判定（pause_mode 开且未在播放），所有渲染路径统一
             paused = (cfg.get("pause_mode", "off") != "off"
                       and ipc.snapshot().get("state") != 2)
+            # 所有重渲染（切歌/暂停/主题/热重载）都走过渡，是否淡入由 fade_native 决定
             paths = wallpaper.render_and_apply(cover, meta, cfg, wallpaper.get_monitors(),
                                                paused=paused)
             applog.log(f"[{why}] 已更新 {len(paths)} 屏 "
