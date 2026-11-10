@@ -644,33 +644,44 @@ def _mp3_info(data: bytes):
     return None
 
 
-def _audio_info(path: str, duration_ms) -> dict:
-    """歌曲信息四值（含单位），解析不了的位置用 —。结果按文件路径缓存。"""
-    key = path or ""
+def _audio_info(path: str, duration_ms, samplerate=0, file_size=0) -> dict:
+    """歌曲信息四值（含单位）。
+
+    数值优先取 AIMP 直读的采样率/文件大小/时长（网络流、移动盘同样准确），
+    文件头解析仅用于补 AIMP 未提供的位深。解析不了的位置填 —。
+    """
+    key = f"{path or ''}|{duration_ms or 0}|{samplerate or 0}|{file_size or 0}"
     hit = _AUDIO_INFO_CACHE.get(key)
     if hit is not None:
         return hit
-    ext = os.path.splitext(key)[1].lower()
+    ext = os.path.splitext(path or "")[1].lower()
     fmt = _FMT_NAMES.get(ext, ext[1:].upper() if ext.startswith(".") and len(ext) > 1 else "—")
-    sr = bits = total = None
-    size_ok = bool(key) and os.path.isfile(key)
-    if size_ok:
+    bits = None
+    sr = int(samplerate or 0) or None
+    size = int(file_size or 0) or 0
+    readable = bool(path) and os.path.isfile(path)
+    if readable:  # 文件头解析：位深只有文件里有（AIMP 不提供），采样率/大小取到也照解析补位深
         try:
-            with open(key, "rb") as f:
+            with open(path, "rb") as f:
                 head = f.read(65536)
             parsed = {"flac": _flac_info, "wav": _wav_info}.get(ext[1:])
             if parsed:
-                sr, bits, total = parsed(head) or (None, None, None)
+                h_sr, bits, _total = parsed(head) or (None, None, None)
+                sr = sr or h_sr
             elif ext == ".mp3":
-                sr, bits, _br = _mp3_info(head) or (None, None, None)
+                h_sr, _bits, _br = _mp3_info(head) or (None, None, None)
+                sr = sr or h_sr
         except OSError:
             pass
-    br = None
-    if size_ok and duration_ms:
-        try:  # 平均比特率=文件大小×8/时长，对 CBR/VBR/FLAC 都成立
-            br = round(os.path.getsize(key) * 8 / (duration_ms / 1000) / 1000)
+    if not size and readable:
+        try:
+            size = os.path.getsize(path)
         except OSError:
-            br = None
+            size = 0
+    br = None
+    if size and duration_ms:
+        # 平均比特率 = 文件大小×8 ÷ 时长（CBR/VBR/无损都成立），数值全部来自 AIMP
+        br = round(size * 8 / (duration_ms / 1000) / 1000)
     vals = {
         "format": fmt or "—",
         "samplerate": (f"{sr / 1000:g} kHz" if sr else "—"),
@@ -687,7 +698,8 @@ def _audio_info(path: str, duration_ms) -> dict:
 
 def _format_info(cfg: dict, meta: dict) -> str:
     """按 info_template 渲染歌曲信息行；四值全未知时返回空串（整行隐藏）。"""
-    vals = _audio_info(meta.get("filename") or "", meta.get("duration_ms"))
+    vals = _audio_info(meta.get("filename") or "", meta.get("duration_ms"),
+                       meta.get("samplerate") or 0, meta.get("file_size") or 0)
     out = str(cfg.get("info_template", "{format} {samplerate} {bitrate} {bits}"))
     for k, v in vals.items():
         out = out.replace("{" + k + "}", v)

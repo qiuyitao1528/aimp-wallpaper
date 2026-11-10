@@ -264,6 +264,12 @@ def _count_btns(widget):
 
 check("gui reorder buttons", _count_btns(win._pages["歌名"]) == 2,
       f"btns={_count_btns(win._pages['歌名'])}")
+lbl = win._line_vars["title"]["order_lbl"].cget("text")
+check("gui order label shown", "1.歌名" in lbl and "4.歌曲信息" in lbl, ascii(lbl))
+win._move_line("title", 1)
+lbl2 = win._line_vars["title"]["order_lbl"].cget("text")
+check("gui order label refresh", "2.歌名" in lbl2 and "1.歌手" in lbl2, ascii(lbl2))
+win._move_line("title", -1)  # 还原
 check("gui 8 tabs", set(win._pages) == {"壁纸", "歌名", "歌手", "专辑", "歌曲信息", "排版", "面板", "系统"},
       str(sorted(win._pages)))
 win._line_vars["title"]["stroke_w"].set("3")
@@ -554,7 +560,11 @@ flac_path = os.path.join(lrc_dir, "song.flac")
 with open(flac_path, "wb") as f:
     f.write(flac)
     f.truncate(flac_size)
-info = _audio_info(flac_path, 60000)
+info = _audio_info(flac_path, 60000)  # 无 AIMP 值 → 全走文件头
+info_aimp = _audio_info("", 60000, samplerate=48000, file_size=flac_size)  # AIMP 直读路径
+check("aimp-first samplerate", info_aimp["samplerate"] == "48 kHz", info_aimp["samplerate"])
+check("aimp-first bitrate", info_aimp["bitrate"] == "1796 kbps", info_aimp["bitrate"])
+check("aimp-first no bits w/o path", info_aimp["bits"] == "—", info_aimp["bits"])
 check("flac format", info["format"] == "FLAC", info["format"])
 check("flac samplerate", info["samplerate"] == "48 kHz", info["samplerate"])
 check("flac bits", info["bits"] == "24 bit", info["bits"])

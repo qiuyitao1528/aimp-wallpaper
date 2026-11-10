@@ -131,6 +131,10 @@ def parse_fileinfo(data: bytes) -> dict | None:
             n = 0
         out[key] = _clean_text(data[pos:pos + n * 2].decode("utf-16-le", errors="replace").rstrip("\x00")) if n else ""
         pos += n * 2
+    # 音频参数（AIMP 直读）：0x10=时长ms，0x14=文件大小字节，0x20=采样率Hz
+    out["duration_ms"] = int.from_bytes(data[0x10:0x14], "little")
+    out["file_size"] = int.from_bytes(data[0x14:0x18], "little")
+    out["samplerate"] = int.from_bytes(data[0x20:0x24], "little")
     return out
 
 
@@ -148,6 +152,7 @@ class AimpIPC(threading.Thread):
         self._snap = {
             "connected": False, "state": STATE_NO_AIMP,
             "position_ms": 0, "duration_ms": 0, "volume": 0,
+            "file_size": 0, "samplerate": 0,
             "title": "", "artist": "", "album": "", "filename": "",
             "cover_gen": 0,
         }
@@ -267,7 +272,12 @@ class AimpIPC(threading.Thread):
             self._snap.update({
                 "title": info["title"], "artist": info["artist"],
                 "album": info["album"], "filename": info["filename"],
+                # 音频参数直接取 AIMP（不经文件头解析，网络/移动盘也准）
+                "file_size": info.get("file_size") or 0,
+                "samplerate": info.get("samplerate") or 0,
             })
+            if info.get("duration_ms"):
+                self._snap["duration_ms"] = info["duration_ms"]
             self._gen += 1
             self._snap["cover_gen"] = self._gen
         self._request_cover()

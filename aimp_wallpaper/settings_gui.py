@@ -194,6 +194,8 @@ class SettingsWindow:
         for key, zh in LINE_ITEMS:
             pg = self._pages[zh]
             v = {}
+            v["order_lbl"] = ttk.Label(pg, text="", foreground="#4C8BF5")
+            add(pg, "当前顺序", v["order_lbl"])
             v["show"] = check(pg, "显示这一行", cfg.get(f"{key}_show", True))
             v["size"] = combo(pg, "字号(像素)", SIZE_CHOICES,
                               px_of(f"{key}_size_ratio", 0.075 if key == "title" else 0.042))
@@ -220,6 +222,7 @@ class SettingsWindow:
                        command=lambda k=key: self._move_line(k, 1)).pack(side="left")
             add(pg, "行顺序", f_btns)
             self._line_vars[key] = v
+        self._refresh_order_labels()
         # 歌曲信息模板（tk.Entry，可自由编辑；token 见 config 注释）
         self._info_tpl_var = tk.StringVar(value=str(cfg.get(
             "info_template", "{format} {samplerate} {bitrate} {bits}")))
@@ -302,6 +305,18 @@ class SettingsWindow:
             return
         self.cfg[key] = max(lo, min(v, hi))
 
+    def _refresh_order_labels(self):
+        """把当前行顺序（如 1歌名 2歌手 …）显示到四个行页的指示条上。"""
+        zh_of = dict(LINE_ITEMS)
+        default = [k for k, _z in LINE_ITEMS]
+        order = [g for g in (self.cfg.get("line_order") or default) if g in default]
+        for g in default:
+            if g not in order:
+                order.append(g)
+        text = "  →  ".join(f"{i + 1}.{zh_of[g]}" for i, g in enumerate(order))
+        for key, v in self._line_vars.items():
+            v["order_lbl"].configure(text=text)
+
     def _move_line(self, key: str, delta: int):
         """右侧文字行顺序上移/下移：改 line_order 并保存，壁纸立即按新顺序重渲染。"""
         default = ["title", "artist", "album", "info"]
@@ -316,6 +331,7 @@ class SettingsWindow:
                 order[i], order[j] = order[j], order[i]
                 self.cfg["line_order"] = order
                 config.save(self.cfg)
+                self._refresh_order_labels()
                 self.status.config(text="行顺序已保存并生效", foreground="#2E7D32")
 
     def _save(self):

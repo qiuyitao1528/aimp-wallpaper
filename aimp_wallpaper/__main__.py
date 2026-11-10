@@ -80,7 +80,7 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
                     cover = ipc.cover_now(snap["cover_gen"])
                     if cover is None:
                         cover = ipc.wait_cover(snap["cover_gen"], timeout=12.0)
-                    meta = {**{k: snap[k] for k in ("title", "artist", "album")}, "filename": snap.get("filename"), "duration_ms": snap.get("duration_ms")}
+                    meta = {**{k: snap[k] for k in ("title", "artist", "album")}, "filename": snap.get("filename"), "duration_ms": snap.get("duration_ms"), "samplerate": snap.get("samplerate"), "file_size": snap.get("file_size")}
                     if cover is not None:
                         last_cover, last_meta, last_gen = cover, meta, snap["cover_gen"]
             if cover is not None or meta is not None:
@@ -112,7 +112,7 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
         snap = ipc.snapshot()
         if not snap["title"] and not snap["filename"]:
             continue  # 元数据还没就绪，等下一轮
-        meta_now = {**{k: snap[k] for k in ("title", "artist", "album")}, "filename": snap.get("filename"), "duration_ms": snap.get("duration_ms")}
+        meta_now = {**{k: snap[k] for k in ("title", "artist", "album")}, "filename": snap.get("filename"), "duration_ms": snap.get("duration_ms"), "samplerate": snap.get("samplerate"), "file_size": snap.get("file_size")}
 
         # 同专辑连播：封面几乎必与上一首相同，先用上一张立即换壁纸，不等 AIMP 回图
         same_album = (last_cover is not None and last_meta is not None and meta_now["album"]
