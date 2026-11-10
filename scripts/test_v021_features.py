@@ -529,6 +529,34 @@ try:
     check("lyrics window smoke", lw.H > 20 and lw._shown_pair == ("第二句", "译", "第三句"),
           f"H={lw.H} pair={ascii(lw._shown_pair)}")
     lw.win.destroy()
+    # 长行自动缩字号适配窗宽（不再被窗边裁掉）
+    lw2_cfg = {**config.DEFAULTS, "lyrics_width": 280}
+    lw2 = LyricsWindow(root3, FakeIpc(), lw2_cfg, lambda: None)
+    lw2.win.withdraw()
+    long_text = "这是一句特别特别长的歌词用来测试自动缩字号功能是否生效" * 2
+    lw2.set_lines([(0, long_text, "")])
+    lw2._render(long_text, "", "")
+    bb = lw2._img.getbbox()
+    check("lyrics long line fits", bb is not None and bb[2] - bb[0] <= lw2.W,
+          f"W={lw2.W} content_w={bb[2]-bb[0] if bb else -1}")
+    # 仅当前行（关下一行）：带译文时高度应变小（下一行整行省略）
+    lw2.set_lines([(0, "当前句", "译文"), (1200, "下一句", "")])
+    lw2._shown_pair = None
+    lw2._render("当前句", "译文", "下一句")
+    bb_tr = lw2._img.getbbox()
+    lw2.cfg["lyrics_show_next"] = False
+    lw2._shown_pair = None
+    lw2._render("当前句", "译文", "")
+    bb_cur = lw2._img.getbbox()
+    check("lyrics next hidden", bb_cur is not None and (bb_cur[3] - bb_cur[1]) < (bb_tr[3] - bb_tr[1]),
+          f"h_both={bb_tr[3]-bb_tr[1]} h_cur_only={bb_cur[3]-bb_cur[1]}")
+    # 字号热改：表面重建 + 强制重绘
+    old_surface = lw2.surface
+    lw2.cfg["lyrics_size_ratio"] = 0.05
+    lw2._ensure_fonts()
+    check("lyrics hot resize", lw2.surface is not old_surface and lw2._shown_pair is None,
+          f"px={lw2._font_cur.size}")
+    lw2.win.destroy()
 except Exception as e:  # 离屏环境可能拿不到 ULW，失败不掩盖其余结论
     check("lyrics window smoke", False, repr(e)[:120])
 root3.destroy()

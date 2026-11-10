@@ -212,21 +212,18 @@ class LyricsWindow:
         self.ipc = ipc
         self.get_panel_pos = get_panel_pos  # () -> (x, y) | None（面板不可见时 None）
         self.s = (desktop.user32.GetDpiForSystem() or 96) / 96.0
-        self.W = int(cfg.get("lyrics_width", 420) * self.s)
-        # 字号按屏幕高比例（与其他文字键同口径），窗口高度按三行（原文/译文/下一行）自适应
-        _short = min(root.winfo_screenwidth(), root.winfo_screenheight())
-        self._px_cur = max(12, int(_short * float(cfg.get("lyrics_size_ratio", 0.032) or 0.032)))
-        self._px_trans = max(10, int(self._px_cur * 0.62))
-        self._px_next = max(10, int(self._px_cur * 0.72))
-        self._gap = max(3, self._px_cur // 8)
-        self.H = self._px_cur + self._px_trans + self._px_next + self._gap * 2 + self._px_cur // 2
         self.lines: list[tuple[int, str]] = []
         self._times: list[int] = []  # 歌词未就绪时 _tick 也要能跑（set_lines 前不存在会炸链）
         self._line_idx = -1
         self._shown_pair = None
-        self._hover_pos = None
         self._drag = None
         self._last_follow = None
+        self._font_key = None
+        self._font_cache = {}
+        self._img = None
+        self._draw = None
+        self.surface = None
+        self._hwnd = None
 
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
@@ -244,14 +241,7 @@ class LyricsWindow:
         self._menu.add_command(label="隐藏歌词", command=self._hide_self)
         self._menu.add_command(label="设置…", command=self._open_settings)
 
-        self._img = Image.new("RGBA", (self.W, self.H), (0, 0, 0, 0))
-        self._draw = ImageDraw.Draw(self._img)
-        self._font_key = None
-        self._ensure_fonts()
-        self._font_trans = wallpaper._load_font(False, self._px_trans,
-                                                cfg.get("lyrics_font_file"))[0]
-        self._font_next = wallpaper._load_font(False, self._px_next,
-                                               cfg.get("lyrics_font_file"))[0]
+        self._ensure_fonts()  # 字体/窗高/表面全部在这里按 cfg 建立（win 之后才能读屏幕尺寸）
 
         self._place_initial()
         self.win.update_idletasks()
@@ -391,17 +381,64 @@ class LyricsWindow:
         i = bisect.bisect_right(self._times, pos_ms) - 1
         return i if i >= 0 else -1
 
+    def _load_lyr_font(self, size: int, bold: bool):
+        """歌词字体带缓存（同字号/粗细/字体文件复用实例）。"""
+        fname = self.cfg.get("lyrics_font_file")
+        key = (int(size), bool(bold), fname)
+        f = self._font_cache.get(key)
+        if f is None:
+            f = wallpaper._load_font(bold, size, fname)[0]
+            self._font_cache[key] = f
+        return f
+
     def _ensure_fonts(self):
-        """按 cfg 里歌词字号/字体取当前行字体（样式热改时换新）。"""
+        """按 cfg 里歌词字号/字体/窗宽重建布局与三行字体。
+
+        样式热改（设置保存/换屏）时：窗口高、ULW 表面随之重建，并清空 _shown_pair
+        强制下一帧重绘——此前只换当前行字体，下一行/译文用旧字体且不重绘（显示 bug）。
+        """
         cfg = self.cfg
         _m = self.win.master
         _short = min(_m.winfo_screenwidth(), _m.winfo_screenheight()) if hasattr(_m, "winfo_screenwidth") else 1080
         px = max(12, int(_short * float(cfg.get("lyrics_size_ratio", 0.032) or 0.032)))
         fname = cfg.get("lyrics_font_file")
-        key = (px, fname)
-        if key != self._font_key:
-            self._font_key = key
-            self._font_cur = wallpaper._load_font(True, px, fname)[0]
+        W = int(int(cfg.get("lyrics_width", 420) or 420) * self.s)
+        key = (px, fname, W)
+        if key == self._font_key:
+            return
+        self._font_key = key
+        self._px_cur = px
+        self._px_trans = max(10, int(self._px_cur * 0.62))
+        self._px_next = max(10, int(self._px_cur * 0.72))
+        self._gap = max(3, self._px_cur // 8)
+        self.W = W
+        self.H = self._px_cur + self._px_trans + self._px_next + self._gap * 2 + self._px_cur // 2
+        self._font_cur = self._load_lyr_font(self._px_cur, True)
+        self._font_trans = self._load_lyr_font(self._px_trans, False)
+        self._font_next = self._load_lyr_font(self._px_next, False)
+        self._img = Image.new("RGBA", (self.W, self.H), (0, 0, 0, 0))
+        self._draw = ImageDraw.Draw(self._img)
+        self._shown_pair = None  # 强制下一帧重绘
+        if getattr(self, "surface", None) is not None:  # 运行中尺寸变化：重建 ULW 表面
+            try:
+                self.surface.close()
+            except Exception:
+                pass
+            self.surface = desktop.OverlaySurface(self._hwnd, self.W, self.H)
+
+    def _fit_row(self, text: str, base_px: int, bold: bool):
+        """长行自动缩小字号适配窗宽；缩到下限仍放不下则截断为省略号。返回 (font, text)。"""
+        avail = max(60, self.W - int(self.s * 24))
+        size = max(10, base_px)
+        f = None
+        while True:
+            f = self._load_lyr_font(size, bold)
+            if wallpaper._text_len(self._draw, text, f) <= avail or size <= 10:
+                break
+            size = max(10, size - max(2, size // 10))
+        if wallpaper._text_len(self._draw, text, f) > avail:
+            text = wallpaper._ellipsis(self._draw, text, f, avail)
+        return f, text
 
     def _tick(self):
         try:
@@ -441,12 +478,18 @@ class LyricsWindow:
         shadow_on = bool(cfg.get("lyrics_shadow", True))
         # 视觉行按需堆叠：原文 / 译文（有对照时）/ 下一行原文；整体在窗内垂直居中
         rows = []
+        show_next = bool(cfg.get("lyrics_show_next", True))
         if cur:
-            rows.append((self._font_cur, cur, (*cur_rgb, 255), sw))
+            f, t = self._fit_row(cur, self._px_cur, True)
+            rows.append((f, t, (*cur_rgb, 255), sw))
         if cur_tr:
-            rows.append((self._font_trans, cur_tr, (*nxt_rgb, 205), max(0, sw - 1)))
-        if nxt and self.cfg.get("lyrics_show_next", True):
-            rows.append((self._font_next, nxt, (*nxt_rgb, 190), max(0, sw - 1)))
+            # 下一行隐藏时译文是唯一对照，提亮；否则按次行弱化
+            tr_alpha = 235 if not (nxt and show_next) else 205
+            f, t = self._fit_row(cur_tr, self._px_trans, False)
+            rows.append((f, t, (*nxt_rgb, tr_alpha), max(0, sw - 1)))
+        if nxt and show_next:
+            f, t = self._fit_row(nxt, self._px_next, False)
+            rows.append((f, t, (*nxt_rgb, 190), max(0, sw - 1)))
         total = sum(f.size for f, *_r in rows) + self._gap * (len(rows) - 1)
         y = (self.H - total) // 2
         for f, t, fill, s in rows:  # 样式与壁纸文字同源：逐字符回退 + 阴影/描边同款管线

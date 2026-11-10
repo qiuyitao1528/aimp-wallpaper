@@ -242,7 +242,23 @@ def _bold_variant(font_file: str) -> str | None:
     return result
 
 
-def _load_font(bold: bool, size: int, font_file: str | None = None) -> tuple[ImageFont.FreeTypeFont, bool]:
+_FONT_LOAD_CACHE: dict = {}  # (bold, size, file) -> (font, real_bold)；每次渲染省 4~6 次 TTF 加载
+
+
+def _load_font(bold, size, font_file=None):
+    """返回 (font, real_bold)。带缓存：实例按 (bold, size, 文件) 复用，超 96 项整表清空。"""
+    key = (bool(bold), int(size), font_file or "")
+    hit = _FONT_LOAD_CACHE.get(key)
+    if hit is not None:
+        return hit
+    result = _load_font_uncached(bool(bold), int(size), font_file)
+    if len(_FONT_LOAD_CACHE) > 96:
+        _FONT_LOAD_CACHE.clear()
+    _FONT_LOAD_CACHE[key] = result
+    return result
+
+
+def _load_font_uncached(bold: bool, size: int, font_file=None) -> tuple:
     """返回 (font, real_bold)。real_bold=True 表示已是真实粗体（粗体字面/可变字体实例），无需描边。"""
     fonts_dir = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
     if font_file:
