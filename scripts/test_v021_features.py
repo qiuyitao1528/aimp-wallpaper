@@ -250,7 +250,7 @@ win._move_line("title", 1)
 lbl2 = win._line_vars["title"]["order_lbl"].cget("text")
 check("gui order label refresh", "2.歌名" in lbl2 and "1.歌手" in lbl2, ascii(lbl2))
 win._move_line("title", -1)  # 还原
-check("gui 8 tabs", set(win._pages) == {"壁纸", "歌名", "歌手", "专辑", "歌曲信息", "排版", "面板", "系统"},
+check("gui 9 tabs", set(win._pages) == {"壁纸", "封面", "歌名", "歌手", "专辑", "歌曲信息", "排版", "面板", "系统"},
       str(sorted(win._pages)))
 win._line_vars["title"]["stroke_w"].set("3")
 win._line_vars["title"]["shadow"].set(False)
@@ -268,6 +268,9 @@ win.pause_dark_var.set("50")
 win.pause_scope_var.set("仅背景")
 win.pause_shrink_var.set(True)
 win.pause_shrink_pct_var.set("20")
+win.darken_var.set("40")
+win.vis_show_var.set(True)
+win.lyr_lock_var.set(True)
 win.lyr_show_var.set(True)
 win.cover_anchor_var.set("右侧")
 win._save()
@@ -293,6 +296,10 @@ check("gui save pause", saved.get("pause_mode") == "badge" and saved.get("pause_
 check("gui save pause scope/shrink", saved.get("pause_darken_scope") == "bg"
       and saved.get("pause_shrink") is True and saved.get("pause_shrink_pct") == 20,
       f"{saved.get('pause_darken_scope')}/{saved.get('pause_shrink')}/{saved.get('pause_shrink_pct')}")
+check("gui save show_text", saved.get("show_text") is True)
+check("gui save darken", abs(saved.get("darken", 0) - 0.6) < 0.02, saved.get("darken"))
+check("gui save vis/lyrics show", saved.get("vis_hidden") is False and saved.get("lyrics_hidden") is False)
+check("gui save lyrics lock", saved.get("lyrics_locked") is True)
 check("gui save lyrics show", saved.get("lyrics_hidden") is False)
 check("gui save cover anchor", saved.get("cover_anchor") == "right", saved.get("cover_anchor"))
 

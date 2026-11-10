@@ -860,11 +860,11 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
         except OSError:
             pass
 
-    # 右侧文字区（歌名/歌手/专辑三行各自独立样式：字号/字体/颜色/加粗/过长/阴影/描边）
+    # 右侧文字区（歌名/歌手/专辑/歌曲信息四行，逐行独立样式）
     anchor = None
     if cfg["show_text"]:
-        # 左缘基准：文字紧跟封面右缘（随封面尺寸移动）；右缘基准：文字固定在槽位右端
-        tx = (cx + max_w if anchor == "right" else cover_x + cw) + int(dim * 0.055) \
+        # 文字起点紧跟封面右缘：任意缩放基准下与封面的间距恒定（右缘基准时数值同槽位右端）
+        tx = cover_x + cw + int(dim * 0.055) \
             + int(cfg.get("text_offset_x", 0) or 0)
         tw_max = w - tx - int(w * 0.06)
         # 单行硬上限：从文字起点到屏幕右缘留 2% 边距（吸收超它就放弃，绝不出屏）
@@ -904,7 +904,7 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                 if overflow == "wrap":  # 折行最多 4 行，无省略号（超限截断）
                     lines = _wrap_title(
                         draw, text, font, tw_max, 4,
-                        max(0, min(20, int(cfg.get(f"{g}_space_window", 0) or 0))), line_limit)
+                        max(0, min(10, int(cfg.get(f"{g}_space_window", 0) or 0))), line_limit)
                 else:
                     lines = [_ellipsis(draw, text, font, tw_max)]
                 blocks.append((g, lines, font, _hex_rgb(cfg.get(f"{g}_color"), (255, 255, 255)),
