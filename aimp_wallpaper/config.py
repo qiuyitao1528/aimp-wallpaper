@@ -105,10 +105,6 @@ DEFAULTS = {
     "artist_space_window": 5,   # 歌手空格断行窗口
     "album_space_window": 5,    # 专辑空格断行窗口
     "info_space_window": 0,     # 歌曲信息空格断行窗口（信息行短，默认关）
-    "title_bracket_break": True,    # 歌名括号断行：断点落在括号组内时吸收闭合括号或整组下移
-    "artist_bracket_break": True,   # 歌手括号断行
-    "album_bracket_break": True,    # 专辑括号断行
-    "info_bracket_break": True,     # 歌曲信息括号断行
     # 歌词悬浮窗（样式与壁纸歌名行同源，迁移时从 title_* 播种）
     "lyrics_hidden": False,     # True=隐藏歌词窗
     "lyrics_locked": False,     # 锁定=禁拖动（仍跟随锚点）

@@ -208,7 +208,6 @@ class SettingsWindow:
                               cfg.get(f"{key}_overflow", "wrap" if key == "title" else "ellipsis"))
             v["space_w"] = labeled(pg, "空格断行(字符)", SPACE_WRAP_ITEMS,
                                    str(int(cfg.get(f"{key}_space_window", 5) or 0)))
-            v["bracket"] = check(pg, "括号断行", cfg.get(f"{key}_bracket_break", True))
             v["bold"] = check(pg, "加粗", cfg.get(f"{key}_bold", key == "title"))
             v["shadow"] = check(pg, "阴影", cfg.get(f"{key}_shadow", True))
             v["stroke_w"] = combo(pg, "描边宽(像素)", STROKE_CHOICES,
@@ -365,7 +364,6 @@ class SettingsWindow:
             self.cfg[f"{key}_overflow"] = dict(OVERFLOW_ITEMS).get(v["of"].get(),
                                                                    "wrap" if key == "title" else "ellipsis")
             self.cfg[f"{key}_space_window"] = int(dict(SPACE_WRAP_ITEMS).get(v["space_w"].get(), "5"))
-            self.cfg[f"{key}_bracket_break"] = v["bracket"].get()
             self.cfg[f"{key}_stroke_color"] = v["stroke_color"].get()
         self.cfg["info_template"] = self._info_tpl_var.get().strip() \
             or "{format} {samplerate} {bitrate} {bits}"

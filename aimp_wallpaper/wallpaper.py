@@ -454,55 +454,12 @@ def _ellipsis(draw, text, font, max_w):
     return (text + "…") if text else "…"
 
 
-_OPEN_BRACKETS = "（(「『【〔［｛{《〈"
-_CLOSE_BRACKETS = "）)』」】〕］｝}》〉"
+def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, line_limit=None):
+    """按像素宽度折行（最多 max_lines 行），超限直接截断、无省略号。
 
-
-def _find_close(text: str, i: int, end: int) -> int:
-    """在 text[i:end) 里找第一个闭合括号，找不到返回 -1。"""
-    for k in range(i, min(end, len(text))):
-        if text[k] in _CLOSE_BRACKETS:
-            return k
-    return -1
-
-
-def _scan_open(seg: str, pos0: int, cur_open: int) -> int:
-    """吸收段 seg（原文从 pos0 起）后返回未闭合开括号位置（-1=无；嵌套不深究，闭合即清）。"""
-    for k, c in enumerate(seg):
-        if c in _OPEN_BRACKETS:
-            if cur_open < 0:
-                cur_open = pos0 + k
-        elif c in _CLOSE_BRACKETS:
-            cur_open = -1
-    return cur_open
-
-
-def _is_break_space(ch: str) -> bool:
-    """可作为断行点的空白：ASCII 空格、全角空格(U+3000)、制表符等（不含换行）。"""
-    return ch == " " or ch == "\u3000" or ch == "\t"
-
-
-def _prev_space(text: str, start: int, end: int) -> int:
-    """在 text[start:end) 里从后往前找最后一个可断空白，返回其下标，找不到 -1。"""
-    for k in range(end - 1, start - 1, -1):
-        if _is_break_space(text[k]):
-            return k
-    return -1
-
-
-def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, bracket_break=False,
-                line_limit=None):
-    """超宽处理：按像素宽度折行，最多 max_lines 行（默认 4），超限直接截断、无省略号——
-    换行模式就是要看到全文，省略号由 overflow=ellipsis 单行模式负责。
-
-    space_window>0：折行点的剩余部分前 space_window 个字符内有空格时，
-    断点移到该空格后（避免把短词组切碎）。
-    bracket_break=True：断点落在括号组内部时——闭合括号就在跟前（space_window
-    个字符内）则吸收闭合括号、把组完整留在本行；否则整组挪到下一行（组从行首
-    就开始时退回普通断行）。
-    line_limit：单行硬宽度上限（像素，通常=文字起点到屏幕右缘的预算）。空格/括号
-    吸收后若超限则放弃吸收——**任何行都绝不超过屏幕可用宽度**（2026-11-10 修复：
-    括号吸收无宽度上限，CJK 吸 3 字 ≈170px 把行顶出屏幕被裁）。
+    space_window>0：折行点之后 space_window 个字符内有空格时，断点移到该空格后
+    （首行允许轻微超宽，避免把短词组切碎）；0 = 纯按宽度折行。
+    line_limit：单行硬宽度上限（通常 = 文字起点到屏幕右缘的预算），吸收后超限则放弃吸收。
     """
     if max_lines <= 1:
         return [_ellipsis(draw, text, font, max_w)]
@@ -511,61 +468,24 @@ def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, bracket_br
     lines, cur = [], ""
     i, n = 0, len(text)
     line_start = 0   # 当前正在累积的这一行在原文里的起点
-    open_pos = -1    # 本行未闭合的开括号位置（-1=不在括号内）
-
-    def _fits(s):
-        return line_limit is None or _text_len(draw, s, font) <= line_limit
-
     while i < n:
         ch = text[i]
         if cur and _text_len(draw, cur + ch, font) > max_w:
-            moved = False
-            if bracket_break and open_pos >= 0:
-                close_j = _find_close(text, i, i + space_window) if space_window > 0 else -1
-                if close_j >= 0 and _fits(text[line_start:close_j + 1]):
-                    seg = text[i:close_j + 1]  # 小尾巴吸收闭合括号，组完整留在本行
-                    cur += seg
-                    open_pos = _scan_open(seg, i, open_pos)
-                    i = close_j + 1
-                    moved = True
-                elif open_pos > line_start:
-                    cur = text[line_start:open_pos]  # 组整体挪到下一行
-                    i = open_pos
-                    moved = True
-                # open_pos == line_start（组占满整行）→ 退回普通断行
-            if not moved and space_window > 0:
-                # ① 优先断在本行最后一个空格（真正的按词换行，避免把单词切开）
-                back = _prev_space(text, line_start, i)
-                if back > line_start:
-                    tail = text[line_start:back]
-                    if _text_len(draw, tail.rstrip(), font) >= max_w * 0.3:  # 别把行留得太空
-                        cur = tail
-                        i = back + 1
-                        while i < n and _is_break_space(text[i]):
-                            i += 1
-                        moved = True
-                # ② 否则向后吸收到最近的空格（原有行为）
-            if not moved and space_window > 0:
+            if space_window > 0:
                 j = text.find(" ", i, i + space_window)
-                if j >= 0 and _fits(text[line_start:j + 1]):
-                    # 吸收到空格（含空格），在空格后直接换行（超 line_limit 则放弃）
-                    seg = text[i:j + 1]
-                    cur += seg
-                    open_pos = _scan_open(seg, i, open_pos)
+                if j >= 0 and (line_limit is None
+                               or _text_len(draw, text[line_start:j + 1], font) <= line_limit):
+                    cur += text[i:j + 1]  # 吸收到空格（含空格），在空格后直接换行
                     i = j + 1
-                    moved = True
             lines.append(cur.rstrip())
             cur = ""
-            open_pos = -1
             if len(lines) == max_lines:  # 达到行数上限：直接截断（换行模式无省略号）
                 break
-            while i < n and _is_break_space(text[i]):  # 断行后跳过前导空白（居中/右对齐会偏移）
+            while i < n and text[i] == " ":  # 断行后跳过前导空格（居中/右对齐会偏移）
                 i += 1
             line_start = i
         else:
             cur += ch
-            if bracket_break:
-                open_pos = _scan_open(ch, i, open_pos)
             i += 1
     if cur and len(lines) < max_lines:
         lines.append(cur)
@@ -888,8 +808,7 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                 if overflow == "wrap":  # 折行最多 4 行，无省略号（超限截断）
                     lines = _wrap_title(
                         draw, text, font, tw_max, 4,
-                        max(0, min(20, int(cfg.get(f"{g}_space_window", 0) or 0))),
-                        bool(cfg.get(f"{g}_bracket_break", True)), line_limit)
+                        max(0, min(20, int(cfg.get(f"{g}_space_window", 0) or 0))), line_limit)
                 else:
                     lines = [_ellipsis(draw, text, font, tw_max)]
                 blocks.append((g, lines, font, _hex_rgb(cfg.get(f"{g}_color"), (255, 255, 255)),

@@ -72,73 +72,29 @@ lines5 = wallpaper._wrap_title(draw, text, font, max_w, 2, space_window=2)
 print("wrap window=0:", ascii(lines0))
 print("wrap window=2:", ascii(lines5))
 check("wrap natural mid-word", lines0[1].startswith("b"), ascii(lines0))
-# 按词断行：断点回退到本行最后一个空格，不把单词切开
-check("wrap space break", lines5[0] == "aaaa" and lines5[1].startswith("bb"), ascii(lines5))
-check("word break no overflow", all(wallpaper._text_len(draw, ln, font) <= max_w for ln in lines5),
-      ascii(lines5))
-# 按词断行的典型效果：整句英文不出现在词中间断开
-t_en = "The Quick Brown Fox Jumps Over The Lazy Dog"
-w_en = wallpaper._text_len(draw, t_en[:len(t_en) // 2], font)
-en_lines = wallpaper._wrap_title(draw, t_en, font, w_en, 4, 5)
-en_words = set(t_en.split())
-check("english word wrapped", all(ln.strip() in t_en for ln in en_lines)
-      and all(w in t_en for ln in en_lines for w in ln.split()), ascii(en_lines))
-# 无空格可吸收时行为退化为普通断行
+# 空格断行：折行点后 N 字符内有空格则吸收到空格后（首行允许轻微超宽）
+check("wrap space break", lines5[0] == "aaaa bb" and lines5[1].startswith("cc"), ascii(lines5))
+check("space absorb wider ok", wallpaper._text_len(draw, lines5[0], font) > max_w, ascii(lines5))
+# 无空格可吸收时退化为普通按宽度断行
 lines_none = wallpaper._wrap_title(draw, "aaaaXXbbXXcc", font, max_w, 2, space_window=3)
 check("wrap no-space fallback", len(lines_none) == 2, ascii(lines_none))
 # 短文本不折行
 check("wrap fits", wallpaper._wrap_title(draw, "hi", font, 10_000, 2, 5) == ["hi"])
-# 括号断行：关=普通断行（行尾孤括号）/ 开=闭合括号贴近则吸收 / 组离行首远则整组下移
-text_b = "aaaa (bb) cc"
-wb1 = wallpaper._text_len(draw, "aaaa (bb", font)
-wb2 = wallpaper._text_len(draw, "aaaa (bb)", font)
-max_b = (wb1 + wb2) / 2  # 让自然断点恰好落在 ")" 之前
-lb0 = wallpaper._wrap_title(draw, text_b, font, max_b, 2, space_window=0)
-lb1 = wallpaper._wrap_title(draw, text_b, font, max_b, 2, space_window=0, bracket_break=True)
-lb2 = wallpaper._wrap_title(draw, text_b, font, max_b, 2, space_window=2, bracket_break=True)
-print("bracket off:", ascii(lb0), "| move:", ascii(lb1), "| absorb:", ascii(lb2))
-check("bracket off normal", lb0[1].startswith(")"), ascii(lb0))
-check("bracket move group", lb1[0] == "aaaa" and lb1[1].startswith("(bb"), ascii(lb1))
-check("bracket absorb close", lb2[0] == "aaaa (bb)" and lb2[1] == "cc", ascii(lb2))
-text_g = "aa (bbbbbbbb) cc"
-wg1 = wallpaper._text_len(draw, "aa (b", font)
-wg2 = wallpaper._text_len(draw, "aa (bb", font)
-lg = wallpaper._wrap_title(draw, text_g, font, (wg1 + wg2) / 2, 2, space_window=2, bracket_break=True)
-print("bracket group move:", ascii(lg))
-check("bracket group to next line", lg[0] == "aa" and lg[1].startswith("("), ascii(lg))
-# 吸收宽度上限（2026-11-10 真实事故回归：括号吸收把行顶出屏幕被裁）
-text_r = "aaaa (bbbb) cc"
-wr1 = wallpaper._text_len(draw, "aaaa (bb", font)
-wr2 = wallpaper._text_len(draw, "aaaa (bbb", font)
-wr_full = wallpaper._text_len(draw, "aaaa (bbbb)", font)
-lr = wallpaper._wrap_title(draw, text_r, font, (wr1 + wr2) / 2, 2, space_window=5,
-                           bracket_break=True, line_limit=wr_full - 10)
-print("bracket guard:", ascii(lr))
-check("bracket absorb guarded", lr[0] == "aaaa" and lr[1].startswith("(bbbb"), ascii(lr))
-lr0 = wallpaper._wrap_title(draw, text_r, font, (wr1 + wr2) / 2, 2, space_window=5,
-                            bracket_break=True)
-check("bracket absorb unguarded ok", lr0[0].startswith("aaaa (bbbb"), ascii(lr0))
+# 吸收宽度上限：吸收后超过 line_limit 则放弃，绝不出屏
 ws1 = wallpaper._text_len(draw, "aaaa bbbb", font)
 ws2 = wallpaper._text_len(draw, "aaaa bbbbb", font)
 ls = wallpaper._wrap_title(draw, "aaaa bbbbb ccc", font, (ws1 + ws2) / 2, 2,
                            space_window=10,
                            line_limit=wallpaper._text_len(draw, "aaaa bbbbb ", font) - 10)
 print("space guard:", ascii(ls))
-check("space absorb guarded", ls[0] == "aaaa", ascii(ls))
-# 全角空格同样可断行
-t_fw = "第一段\u3000第二段\u3000第三段"
-w_fw = wallpaper._text_len(draw, "第一段\u3000第二", font)
-fw_lines = wallpaper._wrap_title(draw, t_fw, font, w_fw, 3, 5)
-check("fullwidth space break", fw_lines[0] in ("第一段", "第一段\u3000第二段"), ascii(fw_lines))
-# 真实事故：Cry For Me (feat. Ami) (为我哭泣) —— 括号吸收整组超屏幕预算 → 整组下移
+check("space absorb guarded", ls[0] == "aaaa bbbb", ascii(ls))
+# 实际事故回归：长标题折行后任何行都不越屏幕预算
 title_r = "Cry For Me (feat. Ami) (为我哭泣)"
-wr_a = wallpaper._text_len(draw, "Cry For Me (feat. Ami) (为我", font)
-wr_b = wallpaper._text_len(draw, "Cry For Me (feat. Ami) (为我哭", font)
-lr2 = wallpaper._wrap_title(draw, title_r, font, (wr_a + wr_b) / 2, 2, space_window=5,
-                            bracket_break=True, line_limit=wr_a + 40)
+wr = wallpaper._text_len(draw, "Cry For Me (feat.", font)
+lr2 = wallpaper._wrap_title(draw, title_r, font, wr, 3, 5, wr + 60)
 print("real case:", ascii(lr2))
-check("real case guarded", len(lr2) == 2 and all(
-    wallpaper._text_len(draw, ln, font) <= wr_a + 40 for ln in lr2), ascii(lr2))
+check("real case within limit", all(wallpaper._text_len(draw, ln, font) <= wr + 60 for ln in lr2),
+      ascii(lr2))
 # 换行模式无省略号：3 行文本 → 3 行全展示，任何一行都不含 …
 text3 = "aaaa bb cc dd ee ff gg"
 w3a = wallpaper._text_len(draw, "aaaa bb", font)
@@ -290,8 +246,6 @@ win._line_vars["title"]["shadow"].set(False)
 win._line_vars["album"]["font"].set("黑体")
 win._line_vars["title"]["space_w"].set("8")
 win._line_vars["artist"]["space_w"].set("关")
-win._line_vars["title"]["bracket"].set(False)
-win._line_vars["artist"]["bracket"].set(False)
 win.bg_style_var.set("模糊+暗角")
 win.night_var.set(True)
 win.night_alpha_var.set("70")
@@ -319,9 +273,6 @@ check("gui save album font", saved.get("album_font_file") == expected_font,
 check("gui save wrap per line", saved.get("title_space_window") == 8
       and saved.get("artist_space_window") == 0 and saved.get("album_space_window") == 5,
       f"{saved.get('title_space_window')}/{saved.get('artist_space_window')}/{saved.get('album_space_window')}")
-check("gui save bracket per line", saved.get("title_bracket_break") is False
-      and saved.get("artist_bracket_break") is False and saved.get("album_bracket_break") is True,
-      f"{saved.get('title_bracket_break')}/{saved.get('artist_bracket_break')}/{saved.get('album_bracket_break')}")
 check("gui save ratio", abs(saved.get("artist_size_ratio", 0) - gui_cfg["artist_size_ratio"]) < 1e-6)
 check("gui save cover style", saved.get("cover_radius") == 24 and saved.get("cover_shadow_alpha") == 70
       and saved.get("cover_stroke_w") == 2,
