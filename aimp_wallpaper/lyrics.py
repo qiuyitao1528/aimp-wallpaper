@@ -23,7 +23,6 @@ from . import applog, config, desktop, wallpaper
 
 _STAMP = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
 _WORDTAG = re.compile(r"<\d+:\d+(?:\.\d+)?>")
-_BRACKETS = re.compile(r"[（(【\[][^）)】\]]*[）)】\]]")
 
 
 def _stamp_ms(minute: str, sec: str, frac: str | None, offset_ms: int = 0) -> int:

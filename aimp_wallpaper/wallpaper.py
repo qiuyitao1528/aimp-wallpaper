@@ -996,8 +996,16 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
     return img
 
 
+_COVER_MAX_PX = 2048  # 封面解码上限（长边）：渲染只需 ~885px 高，2048 留足余量；
+                      # 3000px 封面解码后约 34MB RGBA，超尺寸封面常吃掉 100MB+ 内存
+
+
 def _open_cover(cover_bytes: bytes | None) -> Image.Image | None:
-    """按内容哈希缓存已解码封面（同专辑连播时跳过重复解码）。"""
+    """按内容哈希缓存已解码封面（同专辑连播时跳过重复解码）。
+
+    解码后长边超过 _COVER_MAX_PX 的会等比缩小——渲染目标只有 ~885px 高，
+    原始分辨率缓存是纯内存浪费（3000px 封面 ≈ 34MB/张）。
+    """
     if not cover_bytes:
         return None
     key = hash(cover_bytes)
@@ -1006,11 +1014,16 @@ def _open_cover(cover_bytes: bytes | None) -> Image.Image | None:
         try:
             im = Image.open(io.BytesIO(cover_bytes))
             im.load()
+            if max(im.size) > _COVER_MAX_PX:
+                im.thumbnail((_COVER_MAX_PX, _COVER_MAX_PX), Image.LANCZOS)
+            if im.mode != 'RGB':
+                im = im.convert('RGB')  # 封面不需要 alpha，RGB 直接省 1/4
         except OSError:
             im = None
         if len(_COVER_CACHE) > 2:
             _COVER_CACHE.clear()
-        _COVER_CACHE[key] = im
+        if im is not None:
+            _COVER_CACHE[key] = im
     return im
 
 
@@ -1025,8 +1038,8 @@ def _get_bg(cover_bytes: bytes | None, w: int, h: int, cfg: dict) -> Image.Image
     bg = _BG_CACHE.get(key)
     if bg is None:
         bg = _blur_bg(_open_cover(cover_bytes), w, h, cfg).convert("RGBA")
-        if len(_BG_CACHE) > 4:
-            _BG_CACHE.clear()
+        if len(_BG_CACHE) > 2:
+            _BG_CACHE.clear()  # 每张是整屏 RGBA（~8MB），2 张够 A/B 交替
         _BG_CACHE[key] = bg
     return bg
 
