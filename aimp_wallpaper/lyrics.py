@@ -408,21 +408,29 @@ class LyricsWindow:
         return pos, mtime
 
     def _auto_pos(self):
-        """自动位置（与频谱面板同构）：按跟随模式算目标，最后钳制在工作区内。"""
+        """自动位置（与频谱面板同构）：按跟随模式算目标，最后钳制在工作区内。
+
+        与频谱面板的间距/上下位置由 lyrics_gap / lyrics_side 控制（都可调）。
+        """
         mode = self.cfg.get("lyrics_follow", "panel")
         wa_l, wa_t, wa_r, wa_b = desktop.work_area()
+        gap = max(0, int(self.cfg.get("lyrics_gap", 6) or 0)) * int(self.s)
+        above = self.cfg.get("lyrics_side", "below") == "above"
         if mode == "anchor":
             pos, _ = self._anchor_pos()
             if pos:
-                x, y = pos[0], pos[1] + int(10 * self.s)  # 锚点(文字块底部)再往下挪一档
+                y = (pos[1] - self.H - gap) if above else (pos[1] + gap)
+                x = pos[0]
             else:
                 x, y = wa_r - self.W - int(24 * self.s), wa_b - self.H - int(14 * self.s)
         elif mode == "fixed":
             x, y = wa_r - self.W - int(24 * self.s), wa_b - self.H - int(14 * self.s)
-        else:  # panel：贴频谱面板下沿
+        else:  # panel：贴频谱面板（上方或下方）
             panel_pos = self.get_panel_pos()
             if panel_pos:
-                x, y = panel_pos[0], panel_pos[1] + self.H_panel() + int(6 * self.s)
+                px_, py_ = panel_pos
+                y = (py_ - self.H - gap) if above else (py_ + self.H_panel() + gap)
+                x = px_
             else:
                 x, y = wa_r - self.W - int(24 * self.s), wa_b - self.H - int(14 * self.s)
         x = max(wa_l, min(x, wa_r - self.W))
@@ -589,19 +597,48 @@ class LyricsWindow:
                 pass
             self.surface = desktop.OverlaySurface(self._hwnd, self.W, self.H)
 
-    def _fit_row(self, text: str, base_px: int, bold: bool):
-        """长行自动缩小字号适配窗宽；缩到下限仍放不下则截断为省略号。返回 (font, text)。"""
-        avail = max(60, self.W - 2 * self.pad)
-        size = max(10, base_px)
-        f = None
-        while True:
-            f = self._load_lyr_font(size, bold)
-            if wallpaper._text_len(self._draw, text, f) <= avail or size <= 10:
+    def _cut_to_width(self, text: str, f, avail: int) -> int:
+        """二分找 avail 内能放下的最大前缀长度。"""
+        lo, hi = 1, len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if wallpaper._text_len(self._draw, text[:mid], f) <= avail:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
+
+    def _wrap_lyric(self, text: str, f, avail: int, max_lines: int):
+        """按宽度贪心折行（优先断在空格）。返回 (行列表, 未显示的剩余文本)。"""
+        lines, rest = [], text
+        while rest and len(lines) < max_lines:
+            rest = rest.lstrip()
+            if not rest:
                 break
-            size = max(10, size - max(2, size // 10))
-        if wallpaper._text_len(self._draw, text, f) > avail:
-            text = wallpaper._ellipsis(self._draw, text, f, avail)
-        return f, text
+            cut = self._cut_to_width(rest, f, avail)
+            sp = rest.rfind(" ", 0, cut + 1)  # 优先断在空格（空格位置不太靠前时）
+            if sp > 0:
+                cut = sp
+            lines.append(rest[:cut].rstrip())
+            rest = rest[cut:].lstrip()
+        return lines, rest
+
+    def _layout_row(self, text: str, base_px: int, bold: bool, max_lines: int = 2):
+        """长句排版：字号有下限（不低于 base 的 55% 且 ≥14px，避免缩成小字），
+        超宽按词折行 ≤max_lines 行，仍放不下才省略号。返回 (font, px, [行文本])。"""
+        avail = max(60, self.W - 2 * self.pad)
+        floor = max(14, int(base_px * 0.55))
+        size = base_px
+        while size > floor:
+            f = self._load_lyr_font(size, bold)
+            if wallpaper._text_len(self._draw, text, f) <= avail:
+                return f, size, [text]
+            size = max(floor, size - max(2, size // 8))
+        f = self._load_lyr_font(size, bold)
+        lines, rest = self._wrap_lyric(text, f, avail, max_lines)
+        if rest:  # 折满仍放不下：末行省略号截断
+            lines[-1] = wallpaper._ellipsis(self._draw, lines[-1], f, avail)
+        return f, size, lines
 
     def _tick(self):
         try:
@@ -639,20 +676,21 @@ class LyricsWindow:
         srgb = wallpaper._hex_rgb(cfg.get("lyrics_stroke_color"), (0, 0, 0))
         sw = max(0, min(6, int(cfg.get("lyrics_stroke_w", 2) or 0)))
         shadow_on = bool(cfg.get("lyrics_shadow", True))
-        # 视觉行按需堆叠：原文 / 译文（有对照时）/ 下一行原文；整体在窗内垂直居中
+        # 视觉行按需堆叠：原文（可折 2 行）/ 译文 / 下一行；整体在窗内垂直居中
         rows = []
         show_next = bool(cfg.get("lyrics_show_next", True))
-        if cur:
-            f, t = self._fit_row(cur, self._px_cur, True)
-            rows.append((f, t, (*cur_rgb, 255), sw))
         show_trans = bool(cfg.get("lyrics_show_trans", True))
+        if cur:
+            f, px, ls = self._layout_row(cur, self._px_cur, True, max_lines=2)
+            for t in ls:
+                rows.append((f, t, (*cur_rgb, 255), sw))
         if cur_tr and show_trans:
             # 只剩当前行(原文)时译文是唯一对照，提亮；否则按次行弱化
             tr_alpha = 235 if not (nxt and show_next) else 205
-            f, t = self._fit_row(cur_tr, self._px_trans, False)
+            f, _px, (t,) = self._layout_row(cur_tr, self._px_trans, False, max_lines=1)
             rows.append((f, t, (*nxt_rgb, tr_alpha), max(0, sw - 1)))
         if nxt and show_next:
-            f, t = self._fit_row(nxt, self._px_next, False)
+            f, _px, (t,) = self._layout_row(nxt, self._px_next, False, max_lines=1)
             rows.append((f, t, (*nxt_rgb, 190), max(0, sw - 1)))
         total = sum(f.size for f, *_r in rows) + self._gap * (len(rows) - 1)
         y = (self.H - total) // 2

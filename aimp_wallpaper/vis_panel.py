@@ -170,11 +170,12 @@ class VisPanel:
         return pos, mtime
 
     def _auto_pos(self):
-        """自动模式：优先锚点（专辑名正下方再留一档间距），否则右下角兜底。"""
+        """自动模式：优先锚点（专辑名正下方再留一档间距，间距可调），否则右下角兜底。"""
         pos, _ = self._anchor_pos()
         wa_l, wa_t, wa_r, wa_b = desktop.work_area()
+        gap = max(0, int(self.cfg.get("vis_anchor_gap", 10) or 10)) * int(self.s)
         if pos:
-            x, y = pos[0], pos[1] + int(10 * self.s)  # 锚点(专辑行下 13px)再往下挪一档
+            x, y = pos[0], pos[1] + gap  # 锚点(文字块底部)与面板的间距，可调
         else:
             x, y = wa_r - self.W - int(24 * self.s), wa_b - self.H - int(14 * self.s)
         x = max(wa_l, min(x, wa_r - self.W))

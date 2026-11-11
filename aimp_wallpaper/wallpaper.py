@@ -451,7 +451,10 @@ def _blur_bg(cover: Image.Image | None, w: int, h: int, cfg: dict) -> Image.Imag
 
 # ---------- 字体回退（PIL 不做系统级字体回退，缺字形会画方框） ----------
 
-_FALLBACK_FONTS = ("seguisym.ttf", "tahoma.ttf", "msyh.ttc", "seguiemj.ttf")
+# 外语字形回退链（按语言命中率排序）：符号 → 韩文(맑은고딕) → 日文(游ゴシック) → 简中(微软雅黑) →
+# 西里尔/泰文(Tahoma) → 表情。此前缺韩/日字体，韩语歌词会显示方框（2026-11-11 用户实测）
+_FALLBACK_FONTS = ("seguisym.ttf", "malgun.ttf", "YuGothR.ttc", "msjh.ttc", "msyh.ttc",
+                   "tahoma.ttf", "msgothic.ttc", "gulim.ttc", "seguiemj.ttf")
 _GLYPH_CACHE: dict[tuple, bool] = {}
 _FB_FONT_CACHE: dict[tuple, object] = {}
 _NOTDEF_SIG_CACHE: dict[tuple, tuple] = {}
