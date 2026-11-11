@@ -6,8 +6,8 @@
 
 基于 AIMP 自带 Remote API，将正在播放曲目的封面与元数据实时渲染为海报式桌面壁纸，附带经典频谱可视化面板与桌面歌词。无需安装任何 AIMP 插件，支持 Windows 10 / 11。
 
-[![Release](https://img.shields.io/github/v/release/qiuyitao1528/aimp-wallpaper?style=flat-square&color=4C8BF5)](https://github.com/qiuyitao1528/aimp-wallpaper/releases/latest)
-[![Pre-release](https://img.shields.io/badge/pre--release-0.9.0--beta.1-FB8C00?style=flat-square)](https://github.com/qiuyitao1528/aimp-wallpaper/releases)
+[![Version](https://img.shields.io/github/v/tag/qiuyitao1528/aimp-wallpaper?style=flat-square&color=4C8BF5&label=release)](https://github.com/qiuyitao1528/aimp-wallpaper/releases)
+[![Pre-release](https://img.shields.io/badge/pre--release-0.9.0--beta.4-FB8C00?style=flat-square)](https://github.com/qiuyitao1528/aimp-wallpaper/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows)](https://github.com/qiuyitao1528/aimp-wallpaper)
 [![Python](https://img.shields.io/badge/python-3.12+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/github/license/qiuyitao1528/aimp-wallpaper?style=flat-square&color=3DA639)](LICENSE)
@@ -33,8 +33,8 @@
 | 🎨 | **逐行排版精调** | 四行各自独立：字号、字体、颜色、加粗、阴影、描边、折行规则（按宽度/空格断行）；支持单独隐藏与自由排序 |
 | 🌄 | **多种背景方案** | 模糊 / 模糊+暗角 / 原图铺满 / 主色渐变；模糊提供高斯、柔焦、雾面、辉光四种变体 |
 | 🌙 | **日/夜主题跟随** | 跟随 Windows 深浅色模式，夜间自动叠加遮罩，实时切换 |
-| ℹ️ | **歌曲信息行** | 音频格式、采样率、比特率、位深（自文件头解析），展示模板可定制 |
-| 🎤 | **桌面歌词** | 原文/译文对照悬浮窗；歌词来源为本地缓存、歌曲同目录 `.lrc` 与网易云在线查询 |
+| ℹ️ | **歌曲信息行** | 采样率、比特率、文件大小与时长直接取自 AIMP；位深读取本地音频文件头，展示模板可定制 |
+| 🎤 | **桌面歌词** | 原文/译文对照悬浮窗，可选仅当前行；跟随频谱面板、壁纸文字区或固定在右下；歌词来源为本地缓存、音频内嵌标签与歌曲同目录 `.lrc`（纯本地，不联网） |
 | ⏸️ | **暂停反馈** | 暂停时压暗（范围可选）、显示角标或缩小封面，可自由组合 |
 | 📊 | **频谱面板** | AIMP 经典样式，基于 WASAPI 环回自算 FFT，刷新率 10~120fps 可调 |
 | 🖥️ | **系统集成** | 多显示器逐屏渲染、系统托盘、原壁纸记录与恢复、`UpdateLayeredWindow` 低占用呈现 |
@@ -67,16 +67,17 @@
 
 ## ⚙️ 配置说明
 
-设置窗口共八页，所有配置保存后立即生效（无需重启程序）：
+设置窗口共九页，所有配置保存后立即生效（无需重启程序）：
 
 | 页签 | 内容 |
 |---|---|
-| **壁纸** | 背景方案与模糊类型、日/夜主题跟随、封面缩放基准与大小、封面圆角/阴影/描边、暂停反馈各项 |
+| **壁纸** | 背景方案与模糊类型、背景压暗、切换过渡（Windows 原生淡入）、日/夜主题跟随、暂停反馈各项 |
+| **封面** | 缩放基准（左侧/右侧/居中/居中·左到线）、大小倍率、X/Y 偏移、左边距、圆角、阴影浓度与偏移、描边 |
 | **歌名** | 显隐、行顺序、字号、字体、颜色、加粗、折行规则、阴影、描边 |
 | **歌手 / 专辑** | 同上，各页独立设置 |
 | **歌曲信息** | 显隐、行顺序、信息模板（`{format}` `{samplerate}` `{bitrate}` `{bits}` `{duration}`）、样式 |
-| **排版** | 行间距、文字偏移、水平与垂直对齐 |
-| **面板** | 频谱刷新率与锁定、歌词显隐与样式 |
+| **排版** | 文字总开关、行间距、文字偏移、水平与垂直对齐 |
+| **面板** | 频谱刷新率、尺寸、锁定、与文字区间距；歌词显隐、跟随目标、位置与间距、多语言优先、显示模式、样式 |
 | **系统** | 开机自启、退出时恢复原壁纸 |
 
 ---
@@ -92,7 +93,7 @@
 <details>
 <summary><b>歌词无法获取</b></summary>
 
-歌词按「本地缓存 → 歌曲同目录 `.lrc` → 网易云在线」三级查找。网易云接口为非官方公开接口，可能失效；可将 `.lrc` 文件置于歌曲同目录（与音频同名），歌词窗支持原文/译文对照。
+歌词按「本地缓存 → 音频内嵌歌词（FLAC/ID3） → 歌曲同目录 `.lrc`」三级查找，全部为本地读取、不联网。本地都没有时不显示歌词；可将 `.lrc` 文件置于歌曲同目录（与音频同名），或将歌词写入音频内嵌标签，歌词窗支持原文/译文对照。
 </details>
 
 <details>
@@ -138,9 +139,9 @@ aimp_wallpaper/
 ├── aimp_api.py        # AIMP Remote API 客户端（消息窗口/共享内存/封面推送）
 ├── audio_spectrum.py  # WASAPI 环回 FFT 频谱
 ├── vis_panel.py       # ULW 频谱面板
-├── lyrics.py          # 歌词获取（缓存/.lrc/网易云）与歌词悬浮窗
+├── lyrics.py          # 歌词获取（缓存/内嵌/.lrc）与歌词悬浮窗
 ├── desktop.py         # ULW 覆盖窗基础设施
-├── settings_gui.py    # 设置窗口（八页）
+├── settings_gui.py    # 设置窗口（九页）
 ├── tray.py            # 系统托盘
 ├── config.py          # 配置默认值与旧配置迁移
 └── applog.py          # 日志
