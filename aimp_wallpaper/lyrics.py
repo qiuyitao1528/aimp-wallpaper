@@ -1,4 +1,4 @@
-"""歌词获取与显示：来源 缓存 → 本地 .lrc → 网易云在线（参考 jitwxs/163MusicLyrics 思路）。
+"""歌词获取与显示：来源 缓存 → 音频内嵌歌词 → 同目录 .lrc（纯本地，不联网）。
 
 - LRC 解析：[mm:ss.xx] 多时间标签、[offset:±ms]、增强格式 <mm:ss.xx> 词级标签剥离
 - 抓取在后台线程，结果仅替换 lines 列表（GIL 下安全）
@@ -14,8 +14,6 @@ import os
 import re
 import sys
 import threading
-import urllib.parse
-import urllib.request
 import tkinter as tk
 from ctypes import byref
 
@@ -23,18 +21,9 @@ from PIL import Image, ImageDraw
 
 from . import applog, config, desktop, wallpaper
 
-NETEASE_SEARCH = "https://music.163.com/api/search/get?s={kw}&type=1&limit=8"
-NETEASE_LYRIC = "https://music.163.com/api/song/lyric?os=pc&id={sid}&lv=-1&kv=-1&tv=-1"
-_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Referer": "https://music.163.com"}
 _STAMP = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
 _WORDTAG = re.compile(r"<\d+:\d+(?:\.\d+)?>")
 _BRACKETS = re.compile(r"[（(【\[][^）)】\]]*[）)】\]]")
-
-
-def _http_json(url: str, timeout: int = 6):
-    req = urllib.request.Request(url, headers=_UA)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
 
 
 def _stamp_ms(minute: str, sec: str, frac: str | None, offset_ms: int = 0) -> int:
@@ -66,35 +55,165 @@ def parse_lrc(text: str) -> list[tuple[int, str]]:
     return out
 
 
-def _search_netease(title: str, artist: str, duration_ms: int | None) -> tuple[str | None, str | None]:
-    """网易云搜索 → 选时长最接近的歌曲 → 返回 (原文 LRC, 翻译 LRC)。"""
-    kws = []
-    t = _BRACKETS.sub("", title).strip()
-    a = _BRACKETS.sub("", artist).strip()
-    if a and a != "未知艺术家":
-        kws.append(f"{a} {t}")
-    kws.append(t)
-    for kw in kws:
-        try:
-            res = _http_json(NETEASE_SEARCH.format(kw=urllib.parse.quote(kw)))
-            songs = (res.get("result") or {}).get("songs") or []
-        except Exception:
-            continue
-        if not songs:
-            continue
-        best = songs[0]
-        if duration_ms:
-            near = [s for s in songs if abs(int(s.get("duration") or 0) - duration_ms) <= 5000]
-            if near:
-                best = near[0]
-        try:
-            ly = _http_json(NETEASE_LYRIC.format(sid=best["id"]))
-            lrc = (ly.get("lrc") or {}).get("lyric") or ""
-            if lrc.strip():
-                return lrc, (ly.get("tlyric") or {}).get("lyric") or None
-        except Exception:
-            continue
-    return None, None
+# 内嵌歌词字段名（Vorbis Comment 小写比较；网易/微信导出常见 LYRICS/UNSYNCEDLYRICS）
+_LYRIC_KEYS = {"lyrics", "unsyncedlyrics", "unsynced lyrics", "letra", "paroles", "歌詞"}
+
+
+def _read_flac_lyrics(f) -> list[str]:
+    """FLAC：遍历元数据块收集所有 VORBIS_COMMENT 里的 LYRICS 字段（可能有简繁多版本）。"""
+    f.seek(0)
+    if f.read(4) != b"fLaC":
+        return []
+    found: list[str] = []
+    pos, last, guard = 4, False, 0
+    while not last and guard < 64:
+        guard += 1
+        f.seek(pos)
+        hdr = f.read(4)
+        if len(hdr) < 4:
+            return None
+        last = bool(hdr[0] & 0x80)
+        btype = hdr[0] & 0x7F
+        length = int.from_bytes(hdr[1:4], "big")
+        if btype == 4 and 0 < length < 4_000_000:  # VORBIS_COMMENT
+            data = f.read(length)
+            if len(data) < 8:
+                return found
+            vlen = int.from_bytes(data[0:4], "little")
+            p = 4 + vlen
+            if p + 4 > len(data):
+                return found
+            count = int.from_bytes(data[p:p + 4], "little")
+            p += 4
+            for _ in range(min(count, 512)):
+                if p + 4 > len(data):
+                    break
+                clen = int.from_bytes(data[p:p + 4], "little")
+                p += 4
+                raw = data[p:p + clen]
+                p += clen
+                if b"=" not in raw:
+                    continue
+                k, v = raw.split(b"=", 1)
+                key = k.decode("ascii", "ignore").strip().lower()
+                if key in _LYRIC_KEYS:
+                    text = v.decode("utf-8", "replace")
+                    if text.strip():
+                        found.append(text)
+            return found
+        pos += 4 + length
+    return None
+
+
+# 简繁判定用"仅繁体"字形集：出现即视为繁体（这些字简体写法不同，不会误判）
+_TRAD_ONLY = set(
+    "們這個來說時會後點發現現實對從還經過為與藝術機械愛語言讀寫開關門問題龍鳳寶貝號稱軍師導熱處理"
+    "們東方兩個長聽見東西話謝喜歡應該還記得錯對誰讓覺得運動員區間價錢經驗應該廣場歲數責任"
+    "網絡轉發選擇聯繫確認標準聲響範圍營運機構構築樂團關係歷史紀錄驗證學習練習種類豐富"
+)
+
+
+def _is_traditional(text: str) -> bool:
+    """整段 LRC 是否以繁体为主。
+
+    只看正文（剥离 [ti:]/[ar:] 等元数据行与时间标签），按"仅繁体字出现率"判定——
+    此前把标题等元数据也算进来，个别繁体字就会误判（2026-11-11 实测踩坑）。
+    """
+    body = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or not _STAMP.search(line):
+            continue  # 空行 / 元数据行
+        body.append(_STAMP.sub("", line))
+    content = "".join(body)
+    han = [ch for ch in content if "\u4e00" <= ch <= "\u9fff"]
+    if len(han) < 8:
+        return False
+    hits = sum(1 for ch in han if ch in _TRAD_ONLY)
+    return hits / len(han) >= 0.03  # 3% 以上属仅繁体字 → 判为繁体版
+
+
+def _pick_lyrics(variants: list[str], pref: str = "zh-Hans") -> str | None:
+    """同一文件里多个歌词版本时择优。pref: zh-Hans(默认,简优先) / zh-Hant / any(取第一个)。"""
+    cands = [v for v in variants if v and v.strip()]
+    if not cands:
+        return None
+    pref = str(pref or "zh-Hans")
+    if pref == "zh-Hant":  # 繁体优先
+        cands.sort(key=lambda t: 0 if _is_traditional(t) else 1)
+    elif pref == "zh-Hans":  # 简体优先：排除繁体版本，没有简体再退回第一个
+        simp = [c for c in cands if not _is_traditional(c)]
+        cands = simp or cands
+    return cands[0]
+
+
+def _synchsafe(b: bytes) -> int:
+    return (b[0] << 21) | (b[1] << 14) | (b[2] << 7) | b[3]
+
+
+def _read_id3_lyrics(f) -> str | None:
+    """MP3/M4A 前部 ID3v2：找 USLT（unsigned lyrics）帧。"""
+    f.seek(0)
+    head = f.read(10)
+    if len(head) < 10 or head[:3] != b"ID3":
+        return None
+    major = head[3]
+    size = _synchsafe(head[6:10])
+    body = f.read(min(size, 8_000_000))
+    if major < 2:
+        return None
+    off = 0
+    while off + 10 <= len(body):
+        fid = body[off:off + 4]
+        if not fid.strip(b"\x00"):
+            break
+        if fid == b"USLT":
+            fsize = _synchsafe(body[off + 4:off + 8]) if major >= 4 else \
+                int.from_bytes(body[off + 4:off + 8], "big")
+            raw = body[off + 10:off + 10 + fsize]
+            # 帧体：编码(1) + 语言(3) + 描述(0 结尾) + 歌词
+            if not raw:
+                return None
+            enc = raw[0]
+            rest = raw[4:]  # 跳过编码+语言
+            try:
+                if enc == 1:  # UTF-16 with BOM
+                    desc_end = rest.find(b"\x00\x00")
+                    if desc_end < 0:
+                        return None
+                    text = rest[desc_end + 2:].decode("utf-16", "replace")
+                elif enc == 2:  # UTF-16BE
+                    text = rest.decode("utf-16-be", "replace")
+                elif enc == 3:  # UTF-8
+                    text = rest.split(b"\x00", 1)[-1].decode("utf-8", "replace")
+                else:  # latin-1
+                    text = rest.split(b"\x00", 1)[-1].decode("latin-1", "replace")
+            except (UnicodeDecodeError, IndexError):
+                return None
+            text = text.replace("\x00", "").strip()
+            return text or None
+        fsize = _synchsafe(body[off + 4:off + 8]) if major >= 4 else \
+            int.from_bytes(body[off + 4:off + 8], "big")
+        off += 10 + fsize
+    return None
+
+
+def _read_embedded_lyrics(audio_path: str, pref: str = "zh-Hans") -> str | None:
+    """读音频文件内嵌歌词：FLAC(Vorbis COMMENT) → ID3v2 USLT。失败 None。"""
+    if not audio_path or not os.path.isfile(audio_path):
+        return None
+    try:
+        with open(audio_path, "rb") as f:
+            ext = os.path.splitext(audio_path)[1].lower()
+            if ext == ".flac":
+                return _pick_lyrics(_read_flac_lyrics(f) or [], pref)
+            if ext in (".mp3", ".m4a", ".aac", ".wav", ".aiff"):
+                return _read_id3_lyrics(f)
+            # 其它容器（ape/ogg 等）先试 FLAC 结构再试 ID3
+            picked = _pick_lyrics(_read_flac_lyrics(f) or [], pref)
+            return picked if picked else _read_id3_lyrics(f)
+    except OSError:
+        return None
 
 
 def _local_lrc_candidates(audio_path: str, title: str) -> list[str]:
@@ -128,19 +247,26 @@ def _pair_lyrics(orig: list[tuple[int, str]], trans_lines: list[tuple[int, str]]
 
 
 def fetch_lrc(title: str, artist: str, duration_ms: int | None,
-              cache_dir: str, audio_path: str | None = None):
-    """缓存 → 本地 .lrc → 网易云。返回 [(ms, 原文, 翻译)]（翻译可为空串），失败 None。"""
+              cache_dir: str, audio_path: str | None = None,
+              lang_pref: str = "zh-Hans"):
+    """歌词来源：缓存 → 音频内嵌歌词 → 同目录 .lrc。找不到返回 None（不联网）。
+
+    返回 [(ms, 原文, 翻译)]（翻译可为空串）。
+    """
     os.makedirs(cache_dir, exist_ok=True)
     key = hashlib.md5(f"{title.lower()}|{artist.lower()}".encode("utf-8")).hexdigest()
     cache_file = os.path.join(cache_dir, key + ".lrc")
 
     lrc_text = None
+    tlyric_text = None
     if os.path.exists(cache_file):
         try:
             lrc_text = open(cache_file, "r", encoding="utf-8").read()
         except OSError:
             lrc_text = None
-    if lrc_text is None:
+    if lrc_text is None:  # 1) 内嵌歌词（FLAC 的 LYRICS 字段 / ID3 USLT）
+        lrc_text = _read_embedded_lyrics(audio_path or "", lang_pref)
+    if lrc_text is None:  # 2) 同目录 .lrc 文件
         for cand in _local_lrc_candidates(audio_path or "", title):
             if os.path.exists(cand):
                 for enc in ("utf-8", "gbk", "utf-16"):
@@ -151,9 +277,6 @@ def fetch_lrc(title: str, artist: str, duration_ms: int | None,
                         continue
                 if lrc_text:
                     break
-    tlyric_text = None
-    if lrc_text is None:
-        lrc_text, tlyric_text = _search_netease(title, artist, duration_ms)
     if not lrc_text:
         return None
     lines = parse_lrc(lrc_text)
@@ -198,7 +321,8 @@ class LyricsFetcher(threading.Thread):
                     continue
                 self._key = key
                 lines = fetch_lrc(snap["title"], snap["artist"], snap["duration_ms"] or None,
-                                  self.cfg["output_dir"], snap.get("filename"))
+                                  self.cfg["output_dir"], snap.get("filename"),
+                                  self.cfg.get("lyrics_lang_pref", "zh-Hans"))
                 self.on_lines(lines)
             except Exception:
                 applog.log_exc("歌词抓取异常:\n", *sys.exc_info())

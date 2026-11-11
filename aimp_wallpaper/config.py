@@ -111,6 +111,7 @@ DEFAULTS = {
     "lyrics_follow": "panel",   # 跟随目标 panel=频谱面板 / anchor=壁纸文字区 / fixed=屏幕右下固定
     "lyrics_show_next": True,   # 显示下一行原文
     "lyrics_show_trans": True,  # 显示当前行译文（仅当前行模式下关掉=严格单行）
+    "lyrics_lang_pref": "zh-Hans",  # 多语言歌词优先：zh-Hans 简体 / zh-Hant 繁体 / any 取第一个
     "lyrics_width": 420,        # 歌词窗宽度（px，重启生效）
     "lyrics_locked": False,     # 锁定=禁拖动（仍跟随锚点）
     "lyrics_pos": None,         # 手动定位 [x, y]（拖过后粘滞）

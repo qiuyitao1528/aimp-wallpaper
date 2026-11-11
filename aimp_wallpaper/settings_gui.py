@@ -34,6 +34,7 @@ SPACE_WRAP_ITEMS = [("关", "0"), ("2", "2"), ("3", "3"), ("4", "4"),
 STROKE_CHOICES = [0, 1, 2, 3, 4, 6]
 COVER_STROKE_CHOICES = [0, 1, 2, 3, 4, 6, 8]
 # 歌词显示：原文行 / 译文行 / 下一行 三个独立开关，面板页用复选框表示
+LYRICS_LANG_ITEMS = [("简体中文优先", "zh-Hans"), ("繁体中文优先", "zh-Hant"), ("不区分（取第一个）", "any")]
 LYRICS_FOLLOW_ITEMS = [("跟随频谱面板", "panel"), ("跟随壁纸文字区", "anchor"), ("屏幕右下固定", "fixed")]
 LYRICS_WIDTH_CHOICES = [280, 320, 420, 520, 640]
 MARGIN_CHOICES = [4, 8, 10, 12, 16, 20, 24]
@@ -281,6 +282,8 @@ class SettingsWindow:
         self.fps_var = combo(pg, "刷新率(FPS)", FPS_CHOICES, int(cfg.get("vis_fps", 30) or 30))
         self.lock_var = check(pg, "锁定频谱面板（禁拖动，仍跟随壁纸）", cfg.get("vis_locked"))
         self.lyr_show_var = check(pg, "显示歌词", not cfg.get("lyrics_hidden", False))
+        self.lyr_lang_var = labeled(pg, "歌词多语言优先", LYRICS_LANG_ITEMS,
+                                    cfg.get("lyrics_lang_pref", "zh-Hans"))
         self.lyr_trans_var = check(pg, "显示当前行译文", cfg.get("lyrics_show_trans", True))
         self.lyr_next_var = check(pg, "显示下一行原文", cfg.get("lyrics_show_next", True))
         self.lyr_follow_var = labeled(pg, "歌词跟随", LYRICS_FOLLOW_ITEMS,
@@ -485,6 +488,7 @@ class SettingsWindow:
         self.cfg["vis_hidden"] = not self.vis_show_var.get()
         self._int(self.vis_w_var, "vis_width", 200, 1000, label="面板宽度")
         self._int(self.vis_h_var, "vis_height", 60, 400, label="面板高度")
+        self.cfg["lyrics_lang_pref"] = dict(LYRICS_LANG_ITEMS).get(self.lyr_lang_var.get(), "zh-Hans")
         self.cfg["lyrics_show_trans"] = self.lyr_trans_var.get()
         self.cfg["lyrics_show_next"] = self.lyr_next_var.get()
         self.cfg["lyrics_follow"] = dict(LYRICS_FOLLOW_ITEMS).get(self.lyr_follow_var.get(), "panel")

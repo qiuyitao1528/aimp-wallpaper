@@ -426,6 +426,47 @@ check("lrc bilingual pair", got2 == [(1000, "Hello", "你好"), (4000, "World", 
 got3 = fetch_lrc("bilingual", "someone", None, os.path.join(lrc_dir, "cache2"),
                  os.path.join(song_dir, "bilingual.mp3"))
 check("lrc bilingual cache roundtrip", got3 == got2, str(got3))
+# 内嵌歌词（FLAC VORBIS_COMMENT 的 LYRICS 字段）——不依赖同目录 .lrc
+from aimp_wallpaper.lyrics import _read_embedded_lyrics  # noqa: E402
+
+FLAC_LRC = "[ti:测试]\n[00:01.00]内嵌第一句\n[00:03.00]内嵌第二句\n"
+
+def _make_flac_with_lyrics(path):
+    def block(btype, payload, last=False):
+        hdr = bytes([(0x80 if last else 0) | btype]) + len(payload).to_bytes(3, "big")
+        return hdr + payload
+    si = bytearray(34)
+    si[10], si[11] = 0x0B, 0xB8
+    si[12], si[13] = 0x02, 0x70
+    vendor = b"test"
+    comments = [b"TITLE=Test", b"LYRICS=" + FLAC_LRC.encode("utf-8")]
+    vc = (len(vendor).to_bytes(4, "little") + vendor
+          + len(comments).to_bytes(4, "little")
+          + b"".join(len(c).to_bytes(4, "little") + c for c in comments))
+    data = (b"fLaC" + block(0, bytes(si)) + block(4, vc, last=True))
+    with open(path, "wb") as f:
+        f.write(data)
+
+flac_lyr = os.path.join(lrc_dir, "embedded.flac")
+_make_flac_with_lyrics(flac_lyr)
+emb = _read_embedded_lyrics(flac_lyr)
+check("embedded flac lyrics", bool(emb) and "内嵌第一句" in emb, ascii((emb or "")[:40]))
+emb_lines = fetch_lrc("embedded", "x", None, os.path.join(lrc_dir, "cache3"), flac_lyr)
+check("embedded lyrics fetch", emb_lines is not None and len(emb_lines) == 2
+      and emb_lines[0][1] == "内嵌第一句", str(emb_lines))
+# 多语言择优：同一文件内简繁两版，默认简体优先，可切繁体 / 不区分
+from aimp_wallpaper.lyrics import _pick_lyrics, _is_traditional  # noqa: E402
+
+SIMP = "[00:01.00]我们相爱过 这个时代" + chr(10) + "[00:03.00]发现现实" + chr(10)
+TRAD = "[00:01.00]我們相愛過 這個時代" + chr(10) + "[00:03.00]發現現實" + chr(10)
+check("traditional detect", _is_traditional(TRAD) and not _is_traditional(SIMP),
+      f"trad={_is_traditional(TRAD)} simp={_is_traditional(SIMP)}")
+check("lang pref zh-Hans", _pick_lyrics([TRAD, SIMP], "zh-Hans") == SIMP)
+check("lang pref zh-Hant", _pick_lyrics([SIMP, TRAD], "zh-Hant") == TRAD)
+check("lang pref any", _pick_lyrics([TRAD, SIMP], "any") == TRAD)
+check("lang pref fallback", _pick_lyrics([TRAD], "zh-Hans") == TRAD)
+check("no network fallback", fetch_lrc("definitely-missing-song-xyz", "nobody", None,
+      os.path.join(lrc_dir, "cache4"), None) is None)
 
 # 歌词样式播种：旧配置无 lyrics_* 键 → 从 title_* 播种
 seed_path = os.path.join(tmp, "seed", "config.json")
