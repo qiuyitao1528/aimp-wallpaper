@@ -561,19 +561,36 @@ try:
     tf = tempfile.mkdtemp(prefix="aw_follow_")
     with open(os.path.join(tf, "vis_anchor.json"), "w", encoding="utf-8") as f:
         json.dump({"x": 300, "y": 400}, f)
+    # 跟随逻辑与频谱面板同构：_auto_pos 按模式出不同坐标，_follow_anchor 只在源变化时挪窗
     got = {}
-    for mode, pos, panel in (("panel", None, (800, 300)), ("anchor", None, None),
-                             ("fixed", None, None), ("panel", [1177, 721], (800, 300))):
+    for mode in ("panel", "anchor", "fixed"):
         c = {**config.DEFAULTS, "output_dir": tf, "lyrics_follow": mode,
-             "lyrics_pos": list(pos) if pos else None, "lyrics_width": 420}
-        w = LyricsWindow(root3, FakeIpc(), c, lambda p=panel: p)
+             "lyrics_pos": None, "lyrics_width": 420}
+        w = LyricsWindow(root3, FakeIpc(), c, lambda: (800, 300))
         w.win.withdraw()
-        got[(mode, bool(pos))] = w._target_pos()
+        got[mode] = w._want
         w.win.destroy()
-    check("lyrics follow modes differ", len({got[("panel", False)], got[("anchor", False)],
-                                            got[("fixed", False)]}) == 3, str(got))
-    check("lyrics drag pos ignored when following",
-          got[("panel", True)] == got[("panel", False)], str(got[("panel", True)]))
+    check("lyrics follow modes differ", len(set(got.values())) == 3, str(got))
+    # 面板移动 → panel 模式跟随；锚点变化 → anchor 模式跟随；fixed 不跟
+    c = {**config.DEFAULTS, "output_dir": tf, "lyrics_follow": "panel",
+         "lyrics_pos": None, "lyrics_width": 420}
+    w = LyricsWindow(root3, FakeIpc(), c, lambda: (800, 300))
+    w.win.withdraw()
+    p1 = w._want
+    w.get_panel_pos = lambda: (500, 200)
+    w._follow_anchor()
+    check("lyrics panel follow", w._want != p1, f"{p1} -> {w._want}")
+    w.win.destroy()
+    c["lyrics_follow"] = "anchor"
+    w = LyricsWindow(root3, FakeIpc(), c, lambda: None)
+    w.win.withdraw()
+    p1 = w._want
+    with open(os.path.join(tf, "vis_anchor.json"), "w", encoding="utf-8") as f:
+        json.dump({"x": 700, "y": 500}, f)
+    os.utime(os.path.join(tf, "vis_anchor.json"), None)
+    w._follow_anchor()
+    check("lyrics anchor follow", w._want != p1, f"{p1} -> {w._want}")
+    w.win.destroy()
 except Exception as e:  # 离屏环境可能拿不到 ULW，失败不掩盖其余结论
     check("lyrics window smoke", False, repr(e)[:120])
 root3.destroy()

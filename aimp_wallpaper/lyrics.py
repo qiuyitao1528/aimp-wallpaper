@@ -217,7 +217,10 @@ class LyricsWindow:
         self._line_idx = -1
         self._shown_pair = None
         self._drag = None
-        self._last_follow = None
+        self._want = (0, 0)
+        self._want_mtime = 0
+        self._anchor_mtime = 0
+        self._anchor_cache = None
         self._font_key = None
         self._font_cache = {}
         self._img = None
@@ -260,14 +263,14 @@ class LyricsWindow:
     # ---------- 位置 ----------
 
     def _anchor_pos(self):
-        """跟随壁纸排版：读渲染锚点（文字块底部），mtime 未变时走缓存。失败返回 None。"""
+        """跟随壁纸排版：读渲染锚点，mtime 未变走缓存（与频谱面板同实现）。返回 (pos | None, mtime)。"""
         p = os.path.join(self.cfg["output_dir"], "vis_anchor.json")
         try:
             mtime = os.stat(p).st_mtime
         except OSError:
-            return None
-        if mtime == getattr(self, "_anchor_mtime", 0):
-            return getattr(self, "_anchor_cache", None)
+            return None, 0
+        if mtime == self._anchor_mtime:
+            return self._anchor_cache, mtime
         pos = None
         try:
             with open(p, "r", encoding="utf-8") as f:
@@ -277,53 +280,72 @@ class LyricsWindow:
             pos = None
         self._anchor_mtime = mtime
         self._anchor_cache = pos
-        return pos
+        return pos, mtime
 
-    def _target_pos(self):
+    def _auto_pos(self):
+        """自动位置（与频谱面板同构）：按跟随模式算目标，最后钳制在工作区内。"""
         mode = self.cfg.get("lyrics_follow", "panel")
-        if mode == "fixed":
-            # 固定模式：拖动位置优先，没有就落屏幕右下
-            if self.cfg.get("lyrics_pos"):
-                return tuple(self.cfg["lyrics_pos"])
-        elif self.cfg.get("lyrics_pos"):
-            # 跟随模式：拖动残留坐标会永久压过跟随设置（"选哪个跟随都不动"的根因），清掉
-            self.cfg["lyrics_pos"] = None
-            self._last_drag_cleared = True
-        if mode == "anchor":  # 跟随壁纸文字区（即使面板隐藏也贴着文字块底部）
-            pos = self._anchor_pos()
+        wa_l, wa_t, wa_r, wa_b = desktop.work_area()
+        if mode == "anchor":
+            pos, _ = self._anchor_pos()
             if pos:
-                return (pos[0] + int(6 * self.s), pos[1] + int(6 * self.s))
-        elif mode == "fixed":  # 固定屏幕右下，不跟随
-            pass
-        else:  # panel：跟随频谱面板（默认）
+                x, y = pos[0], pos[1] + int(10 * self.s)  # 锚点(文字块底部)再往下挪一档
+            else:
+                x, y = wa_r - self.W - int(24 * self.s), wa_b - self.H - int(14 * self.s)
+        elif mode == "fixed":
+            x, y = wa_r - self.W - int(24 * self.s), wa_b - self.H - int(14 * self.s)
+        else:  # panel：贴频谱面板下沿
             panel_pos = self.get_panel_pos()
             if panel_pos:
-                return (panel_pos[0] + int(6 * self.s), panel_pos[1] + self.H_panel() + int(6 * self.s))
-        wa_l, wa_t, wa_r, wa_b = desktop.work_area()
-        return (wa_r - self.W - int(24 * self.s), wa_b - self.H - int(120 * self.s))
+                x, y = panel_pos[0], panel_pos[1] + self.H_panel() + int(6 * self.s)
+            else:
+                x, y = wa_r - self.W - int(24 * self.s), wa_b - self.H - int(14 * self.s)
+        x = max(wa_l, min(x, wa_r - self.W))
+        y = max(wa_t, min(y, wa_b - self.H))
+        return x, y
 
     def H_panel(self) -> int:
         return int(self.cfg.get("vis_height", 120) * self.s)
 
     def _place_initial(self):
-        pos = self._target_pos()
-        self.win.geometry(f"+{pos[0]}+{pos[1]}")
+        pos = self.cfg.get("lyrics_pos")
+        if pos and len(pos) == 2:
+            x, y = int(pos[0]), int(pos[1])
+        else:
+            x, y = self._auto_pos()
+        self.win.geometry(f"+{x}+{y}")
+        self._want = (x, y)
 
     def _screen_pos(self):
         r = desktop.wintypes.RECT()
         desktop.user32.GetWindowRect(self._hwnd, byref(r))
         return (int(r.left), int(r.top))
 
-    def _follow(self):
-        # 锁定只禁拖动，仍跟随（与频谱面板一致）；固定模式由 _target_pos 返回拖动坐标
-        if self.cfg.get("lyrics_locked"):
+    def _follow_anchor(self):
+        """与频谱面板一致：手动定位后不跟；锚点文件变化或面板移动时才挪窗。"""
+        if self.cfg.get("lyrics_pos"):
             return
-        pos = self._target_pos()
-        if pos != self._last_follow:
-            self._last_follow = pos
-            if pos != self._screen_pos():
-                self.win.geometry(f"+{pos[0]}+{pos[1]}")
-                self.surface.update(self._img, pos=pos)  # 内容随窗口一起走
+        mode = self.cfg.get("lyrics_follow", "panel")
+        if mode == "fixed":
+            return
+        moved = False
+        if mode == "anchor":
+            pos, mtime = self._anchor_pos()
+            if pos and mtime != getattr(self, "_want_mtime", 0):
+                self._want_mtime = mtime
+                moved = True
+        else:  # panel：面板可能被拖动，位置每帧都纠一次（代价极小）
+            moved = True
+        x, y = self._auto_pos()
+        if moved and (x, y) != self._want:
+            self._want = (x, y)
+            self.win.geometry(f"+{x}+{y}")
+            if self.surface is not None:
+                self.surface.update(self._img, pos=(x, y))  # ULW 内容随窗口一起走
+
+    def _move_to(self, x: int, y: int):
+        self._want = (x, y)
+        self.win.geometry(f"+{x}+{y}")
 
     # ---------- 显隐/锁定 ----------
 
@@ -341,9 +363,10 @@ class LyricsWindow:
     def _follow_again(self):
         """清掉拖动坐标，回到面板跟随（固定模式的"复活"入口）。"""
         self.cfg["lyrics_pos"] = None
-        self.cfg["lyrics_follow"] = "panel"
         config.save(self.cfg)
-        self._last_follow = None
+        self._anchor_mtime = 0
+        self._want_mtime = 0
+        self._follow_anchor()
 
     def _hide_self(self):
         self.set_hidden(True)
@@ -363,9 +386,8 @@ class LyricsWindow:
             return
         dxr, dyr, ox, oy = self._drag
         nx, ny = ox + e.x_root - dxr, oy + e.y_root - dyr
-        self.cfg["lyrics_pos"] = [nx, ny]
-        self.cfg["lyrics_follow"] = "fixed"  # 拖动即视为"想放这里"，切固定模式，否则松手就被跟随拉走
-        self.win.geometry(f"+{nx}+{ny}")
+        self.cfg["lyrics_pos"] = [nx, ny]  # 拖过后粘滞（与频谱面板同语义）
+        self._move_to(nx, ny)
         # ULW 内容不跟 HWND 移动：拖动时必须立即原子重呈，否则内容滞留旧位置（消失一半）
         self.surface.update(self._img, pos=(nx, ny))
 
@@ -465,7 +487,7 @@ class LyricsWindow:
                 if not self.win.winfo_viewable():
                     self.win.deiconify()
                     desktop.seat_overlays()
-                self._follow()
+                self._follow_anchor()
                 self._ensure_fonts()
                 snap = self.ipc.snapshot()
                 pos = snap["position_ms"] + 300  # 提前 300ms 切行，观感更跟手
