@@ -556,7 +556,24 @@ try:
     lw2._ensure_fonts()
     check("lyrics hot resize", lw2.surface is not old_surface and lw2._shown_pair is None,
           f"px={lw2._font_cur.size}")
+    # 跟随模式三选：残留的拖动坐标不得压过跟随（『选哪个跟随都不动』回归）
     lw2.win.destroy()
+    tf = tempfile.mkdtemp(prefix="aw_follow_")
+    with open(os.path.join(tf, "vis_anchor.json"), "w", encoding="utf-8") as f:
+        json.dump({"x": 300, "y": 400}, f)
+    got = {}
+    for mode, pos, panel in (("panel", None, (800, 300)), ("anchor", None, None),
+                             ("fixed", None, None), ("panel", [1177, 721], (800, 300))):
+        c = {**config.DEFAULTS, "output_dir": tf, "lyrics_follow": mode,
+             "lyrics_pos": list(pos) if pos else None, "lyrics_width": 420}
+        w = LyricsWindow(root3, FakeIpc(), c, lambda p=panel: p)
+        w.win.withdraw()
+        got[(mode, bool(pos))] = w._target_pos()
+        w.win.destroy()
+    check("lyrics follow modes differ", len({got[("panel", False)], got[("anchor", False)],
+                                            got[("fixed", False)]}) == 3, str(got))
+    check("lyrics drag pos ignored when following",
+          got[("panel", True)] == got[("panel", False)], str(got[("panel", True)]))
 except Exception as e:  # 离屏环境可能拿不到 ULW，失败不掩盖其余结论
     check("lyrics window smoke", False, repr(e)[:120])
 root3.destroy()

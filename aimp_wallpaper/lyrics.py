@@ -238,6 +238,7 @@ class LyricsWindow:
         self._lock_var = tk.BooleanVar(value=bool(cfg.get("lyrics_locked")))
         self._menu.add_checkbutton(label="锁定（禁拖动）", variable=self._lock_var,
                                    command=self._toggle_lock)
+        self._menu.add_command(label="恢复跟随", command=self._follow_again)
         self._menu.add_command(label="隐藏歌词", command=self._hide_self)
         self._menu.add_command(label="设置…", command=self._open_settings)
 
@@ -279,9 +280,15 @@ class LyricsWindow:
         return pos
 
     def _target_pos(self):
-        if self.cfg.get("lyrics_pos"):
-            return tuple(self.cfg["lyrics_pos"])
         mode = self.cfg.get("lyrics_follow", "panel")
+        if mode == "fixed":
+            # 固定模式：拖动位置优先，没有就落屏幕右下
+            if self.cfg.get("lyrics_pos"):
+                return tuple(self.cfg["lyrics_pos"])
+        elif self.cfg.get("lyrics_pos"):
+            # 跟随模式：拖动残留坐标会永久压过跟随设置（"选哪个跟随都不动"的根因），清掉
+            self.cfg["lyrics_pos"] = None
+            self._last_drag_cleared = True
         if mode == "anchor":  # 跟随壁纸文字区（即使面板隐藏也贴着文字块底部）
             pos = self._anchor_pos()
             if pos:
@@ -308,7 +315,8 @@ class LyricsWindow:
         return (int(r.left), int(r.top))
 
     def _follow(self):
-        if self.cfg.get("lyrics_locked") or self.cfg.get("lyrics_pos"):
+        # 锁定只禁拖动，仍跟随（与频谱面板一致）；固定模式由 _target_pos 返回拖动坐标
+        if self.cfg.get("lyrics_locked"):
             return
         pos = self._target_pos()
         if pos != self._last_follow:
@@ -330,6 +338,13 @@ class LyricsWindow:
         self.cfg["lyrics_locked"] = bool(self._lock_var.get())
         config.save(self.cfg)
 
+    def _follow_again(self):
+        """清掉拖动坐标，回到面板跟随（固定模式的"复活"入口）。"""
+        self.cfg["lyrics_pos"] = None
+        self.cfg["lyrics_follow"] = "panel"
+        config.save(self.cfg)
+        self._last_follow = None
+
     def _hide_self(self):
         self.set_hidden(True)
 
@@ -349,6 +364,7 @@ class LyricsWindow:
         dxr, dyr, ox, oy = self._drag
         nx, ny = ox + e.x_root - dxr, oy + e.y_root - dyr
         self.cfg["lyrics_pos"] = [nx, ny]
+        self.cfg["lyrics_follow"] = "fixed"  # 拖动即视为"想放这里"，切固定模式，否则松手就被跟随拉走
         self.win.geometry(f"+{nx}+{ny}")
         # ULW 内容不跟 HWND 移动：拖动时必须立即原子重呈，否则内容滞留旧位置（消失一半）
         self.surface.update(self._img, pos=(nx, ny))
