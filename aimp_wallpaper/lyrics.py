@@ -212,6 +212,7 @@ class LyricsWindow:
         self.ipc = ipc
         self.get_panel_pos = get_panel_pos  # () -> (x, y) | None（面板不可见时 None）
         self.s = (desktop.user32.GetDpiForSystem() or 96) / 96.0
+        self.pad = int(4 * self.s)  # 与 vis_panel.pad 一致，保证左缘对齐
         self.lines: list[tuple[int, str]] = []
         self._times: list[int] = []  # 歌词未就绪时 _tick 也要能跑（set_lines 前不存在会炸链）
         self._line_idx = -1
@@ -466,7 +467,7 @@ class LyricsWindow:
 
     def _fit_row(self, text: str, base_px: int, bold: bool):
         """长行自动缩小字号适配窗宽；缩到下限仍放不下则截断为省略号。返回 (font, text)。"""
-        avail = max(60, self.W - int(self.s * 24))
+        avail = max(60, self.W - 2 * self.pad)
         size = max(10, base_px)
         f = None
         while True:
@@ -520,8 +521,9 @@ class LyricsWindow:
         if cur:
             f, t = self._fit_row(cur, self._px_cur, True)
             rows.append((f, t, (*cur_rgb, 255), sw))
-        if cur_tr:
-            # 下一行隐藏时译文是唯一对照，提亮；否则按次行弱化
+        show_trans = bool(cfg.get("lyrics_show_trans", True))
+        if cur_tr and show_trans:
+            # 只剩当前行(原文)时译文是唯一对照，提亮；否则按次行弱化
             tr_alpha = 235 if not (nxt and show_next) else 205
             f, t = self._fit_row(cur_tr, self._px_trans, False)
             rows.append((f, t, (*nxt_rgb, tr_alpha), max(0, sw - 1)))
@@ -530,10 +532,11 @@ class LyricsWindow:
             rows.append((f, t, (*nxt_rgb, 190), max(0, sw - 1)))
         total = sum(f.size for f, *_r in rows) + self._gap * (len(rows) - 1)
         y = (self.H - total) // 2
+        x0 = self.pad  # 左对齐：与频谱面板左缘同一内边距
         for f, t, fill, s in rows:  # 样式与壁纸文字同源：逐字符回退 + 阴影/描边同款管线
             wallpaper._draw_shadow_text(
-                self._img, (self.W / 2, y + f.size / 2), t, f,
-                fill=fill, anchor="mm", shadow_alpha=170,
+                self._img, (x0, y + f.size / 2), t, f,
+                fill=fill, anchor="lm", shadow_alpha=170,
                 stroke_width=s, stroke_fill=(*srgb, 200) if s else None,
                 shadow=shadow_on)
             y += f.size + self._gap

@@ -272,8 +272,9 @@ win.cover_margin_var.set("16")
 win.darken_var.set("40")
 win.vis_show_var.set(True)
 win.lyr_lock_var.set(True)
-win.lyr_mode_var.set("仅当前行")
-win.lyr_w_var.set("420")
+win.lyr_next_var.set(False)
+win.lyr_trans_var.set(False)
+win.lyr_w_var.set("520")
 win.lyr_show_var.set(True)
 win.cover_anchor_var.set("右侧")
 win._save()
@@ -304,7 +305,8 @@ check("gui save darken", abs(saved.get("darken", 0) - 0.6) < 0.02, saved.get("da
 check("gui save vis/lyrics show", saved.get("vis_hidden") is False and saved.get("lyrics_hidden") is False)
 check("gui save lyrics lock", saved.get("lyrics_locked") is True)
 check("gui save lyrics mode/follow/width", saved.get("lyrics_show_next") is False
-      and saved.get("lyrics_follow") == "panel" and saved.get("lyrics_width") == 420,
+      and saved.get("lyrics_show_trans") is False
+      and saved.get("lyrics_follow") == "panel" and saved.get("lyrics_width") == 520,
       f"{saved.get('lyrics_show_next')}/{saved.get('lyrics_follow')}/{saved.get('lyrics_width')}")
 check("gui save margin", abs(saved.get("cover_margin_ratio", 0) - 0.16) < 0.01, saved.get("cover_margin_ratio"))
 check("gui save lyrics show", saved.get("lyrics_hidden") is False)
@@ -550,6 +552,21 @@ try:
     bb_cur = lw2._img.getbbox()
     check("lyrics next hidden", bb_cur is not None and (bb_cur[3] - bb_cur[1]) < (bb_tr[3] - bb_tr[1]),
           f"h_both={bb_tr[3]-bb_tr[1]} h_cur_only={bb_cur[3]-bb_cur[1]}")
+    # 仅当前行 + 关译文 = 严格单行（之前译文仍会画出来）
+    lw2.cfg["lyrics_show_trans"] = False
+    lw2._shown_pair = None
+    lw2._render("当前句", "译文", "下一句")
+    bb_strict = lw2._img.getbbox()
+    check("lyrics strict single line", bb_strict is not None
+          and (bb_strict[3] - bb_strict[1]) < (bb_cur[3] - bb_cur[1]),
+          f"h_cur+tr={bb_cur[3]-bb_cur[1]} h_strict={bb_strict[3]-bb_strict[1]}")
+    lw2.cfg["lyrics_show_trans"] = True
+    # 左对齐：文本左缘贴着窗口内边距（不是居中）
+    lw2._shown_pair = None
+    lw2._render("短句", "", "")
+    bb_l = lw2._img.getbbox()
+    check("lyrics left aligned", bb_l is not None and abs(bb_l[0] - lw2.pad) <= 3,
+          f"left={bb_l[0] if bb_l else -1} pad={lw2.pad}")
     # 字号热改：表面重建 + 强制重绘
     old_surface = lw2.surface
     lw2.cfg["lyrics_size_ratio"] = 0.05

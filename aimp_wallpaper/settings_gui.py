@@ -33,7 +33,7 @@ SPACE_WRAP_ITEMS = [("关", "0"), ("2", "2"), ("3", "3"), ("4", "4"),
                     ("5", "5"), ("6", "6"), ("8", "8"), ("10", "10")]
 STROKE_CHOICES = [0, 1, 2, 3, 4, 6]
 COVER_STROKE_CHOICES = [0, 1, 2, 3, 4, 6, 8]
-LYRICS_MODE_ITEMS = [("当前行+下一行", "both"), ("仅当前行", "current")]
+# 歌词显示：原文行 / 译文行 / 下一行 三个独立开关，面板页用复选框表示
 LYRICS_FOLLOW_ITEMS = [("跟随频谱面板", "panel"), ("跟随壁纸文字区", "anchor"), ("屏幕右下固定", "fixed")]
 LYRICS_WIDTH_CHOICES = [280, 320, 420, 520, 640]
 MARGIN_CHOICES = [4, 8, 10, 12, 16, 20, 24]
@@ -281,8 +281,8 @@ class SettingsWindow:
         self.fps_var = combo(pg, "刷新率(FPS)", FPS_CHOICES, int(cfg.get("vis_fps", 30) or 30))
         self.lock_var = check(pg, "锁定频谱面板（禁拖动，仍跟随壁纸）", cfg.get("vis_locked"))
         self.lyr_show_var = check(pg, "显示歌词", not cfg.get("lyrics_hidden", False))
-        self.lyr_mode_var = labeled(pg, "歌词显示", LYRICS_MODE_ITEMS,
-                                    "both" if cfg.get("lyrics_show_next", True) else "current")
+        self.lyr_trans_var = check(pg, "显示当前行译文", cfg.get("lyrics_show_trans", True))
+        self.lyr_next_var = check(pg, "显示下一行原文", cfg.get("lyrics_show_next", True))
         self.lyr_follow_var = labeled(pg, "歌词跟随", LYRICS_FOLLOW_ITEMS,
                                       cfg.get("lyrics_follow", "panel"))
         self.lyr_w_var = combo(pg, "歌词窗宽度(像素)", LYRICS_WIDTH_CHOICES,
@@ -295,7 +295,7 @@ class SettingsWindow:
                                   width=28, readonly=True)
         self.lyr_px_var = combo(pg, "歌词字号(像素)", SIZE_CHOICES, px_of("lyrics_size_ratio", 0.032))
         self.lyr_color_var = self._color_row(add, pg, "歌词颜色", "lyrics_color", "#FFFFFF")
-        self.lyr_next_var = self._color_row(add, pg, "下一行颜色", "lyrics_next_color", "#B0B0B0")
+        self.lyr_next_color_var = self._color_row(add, pg, "下一行颜色", "lyrics_next_color", "#B0B0B0")
         self.lyr_sw_var = combo(pg, "歌词描边宽(像素)", STROKE_CHOICES,
                                 int(cfg.get("lyrics_stroke_w", 2) or 0))
         self.lyr_sc_var = self._color_row(add, pg, "歌词描边色", "lyrics_stroke_color", "#000000")
@@ -474,7 +474,7 @@ class SettingsWindow:
         self.cfg["lyrics_font_file"] = self._label_to_file.get(self.lyr_font_var.get())
         self._int(self.lyr_px_var, "lyrics_size_ratio", 10, self.screen_short, ratio=True, label="歌词字号")
         self.cfg["lyrics_color"] = self.lyr_color_var.get()
-        self.cfg["lyrics_next_color"] = self.lyr_next_var.get()
+        self.cfg["lyrics_next_color"] = self.lyr_next_color_var.get()
         self._int(self.lyr_sw_var, "lyrics_stroke_w", 0, 6, label="歌词描边宽")
         self.cfg["lyrics_stroke_color"] = self.lyr_sc_var.get()
         self.cfg["lyrics_shadow"] = self.lyr_shadow_var.get()
@@ -485,7 +485,8 @@ class SettingsWindow:
         self.cfg["vis_hidden"] = not self.vis_show_var.get()
         self._int(self.vis_w_var, "vis_width", 200, 1000, label="面板宽度")
         self._int(self.vis_h_var, "vis_height", 60, 400, label="面板高度")
-        self.cfg["lyrics_show_next"] = dict(LYRICS_MODE_ITEMS).get(self.lyr_mode_var.get(), "both") == "both"
+        self.cfg["lyrics_show_trans"] = self.lyr_trans_var.get()
+        self.cfg["lyrics_show_next"] = self.lyr_next_var.get()
         self.cfg["lyrics_follow"] = dict(LYRICS_FOLLOW_ITEMS).get(self.lyr_follow_var.get(), "panel")
         self._int(self.lyr_w_var, "lyrics_width", 200, 1000, label="歌词窗宽度")
         self.cfg["restore_on_quit"] = self.restore_var.get()
