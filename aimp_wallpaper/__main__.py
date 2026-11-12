@@ -39,13 +39,9 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
     import comtypes
     comtypes.CoInitialize()  # COM 需在本线程初始化
     wallpaper.capture_original(cfg)
-    last_gen = -1
-    last_cover = None
-    last_meta = None
-    last_cfg_mtime = None
-    last_dark = None       # 日/夜主题跟随的基线（None=还没查过）
-    dark_check_t = 0.0
-    last_paused = False    # 暂停显示的基线
+    # 跨轮状态（传给 _worker_round）：曲目代数/封面/元数据/配置mtime/主题基线/暂停基线
+    state = {"gen": -1, "cover": None, "meta": None, "cfg_mtime": None,
+             "dark": None, "dark_t": 0.0, "paused": False}
 
     def render(cover, meta, why: str) -> bool:
         try:
@@ -63,85 +59,106 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
             return False
 
     while not stop.is_set():
-        # 配置热重载：设置窗口保存后立即重渲染当前曲目
+        # 整个循环体兜底：任何一轮的意外异常（配置解析/COM 抖动等）都不允许弄死
+        # 壁纸线程——线程一死就永久不换壁纸，只能重启程序（用户实际遇到的顽疾）。
         try:
-            mt = os.path.getmtime(config.CONFIG_PATH)
-        except OSError:
-            mt = None
-        if last_cfg_mtime is None:
-            last_cfg_mtime = mt
-        elif mt != last_cfg_mtime:
-            last_cfg_mtime = mt
-            cfg.update(config.load())
-            applog.log("配置变更，热重载")
-            cover, meta = last_cover, last_meta
-            if cover is None and meta is None:  # 本实例还没渲染过：取当前曲目兜底
-                snap = ipc.snapshot()
-                if (snap["title"] or snap["filename"]) and snap["connected"]:
-                    cover = ipc.cover_now(snap["cover_gen"])
-                    if cover is None:
-                        cover = ipc.wait_cover(snap["cover_gen"], timeout=12.0)
-                    meta = {**{k: snap[k] for k in ("title", "artist", "album")}, "filename": snap.get("filename"), "duration_ms": snap.get("duration_ms"), "samplerate": snap.get("samplerate"), "file_size": snap.get("file_size"), "bit_rate": snap.get("bit_rate")}
-                    if cover is not None:
-                        last_cover, last_meta, last_gen = cover, meta, snap["cover_gen"]
-            if cover is not None or meta is not None:
-                render(cover, meta, "热重载")
-            else:
-                applog.log("热重载：尚无曲目可渲染，跳过")
+            _worker_round(ipc, cfg, stop, render, state)
+        except Exception:
+            applog.log_exc("壁纸线程单轮异常（已跳过本轮继续）:\n", *sys.exc_info())
+            time.sleep(0.5)
 
-        # 日/夜主题跟随：每 ~3s 查一次系统主题，翻转后用当前曲目重渲染
-        if cfg.get("theme_night_follow") and time.monotonic() - dark_check_t > 3.0:
-            dark_check_t = time.monotonic()
-            dark = wallpaper.system_is_dark()
-            if last_dark is None:
-                last_dark = dark
-            elif dark != last_dark and (last_cover is not None or last_meta is not None):
-                last_dark = dark
-                render(last_cover, last_meta, "主题切换")
 
-        # 暂停状态翻转：用当前曲目重渲染（pause_mode=off 时跳过）
-        if cfg.get("pause_mode", "off") != "off":
-            paused_now = ipc.snapshot().get("state") != 2  # 2=播放中，其余按暂停处理
-            flipped = paused_now != last_paused
-            last_paused = paused_now
-            if flipped and (last_cover is not None or last_meta is not None):
-                render(last_cover, last_meta, "暂停切换")
+def _worker_round(ipc, cfg, stop, render, state: dict):
+    """壁纸线程的一轮：配置热重载 / 主题跟随 / 暂停反馈 / 切歌检测与渲染。
 
-        gen = ipc.wait_track_change(timeout=0.5)
-        if stop.is_set() or gen == last_gen or not ipc.snapshot()["connected"]:
-            continue
-        snap = ipc.snapshot()
-        if not snap["title"] and not snap["filename"]:
-            continue  # 元数据还没就绪，等下一轮
-        meta_now = {**{k: snap[k] for k in ("title", "artist", "album")}, "filename": snap.get("filename"), "duration_ms": snap.get("duration_ms"), "samplerate": snap.get("samplerate"), "file_size": snap.get("file_size"), "bit_rate": snap.get("bit_rate")}
+    state 携带跨轮状态：gen/cover/meta/cfg_mtime/dark/dark_t/paused。
+    """
+    last_gen = state["gen"]
+    last_cover = state["cover"]
+    last_meta = state["meta"]
 
-        # 同专辑连播：封面几乎必与上一首相同，先用上一张立即换壁纸，不等 AIMP 回图
-        same_album = (last_cover is not None and last_meta is not None and meta_now["album"]
-                      and meta_now["album"] == last_meta.get("album")
-                      and meta_now["artist"] == last_meta.get("artist"))
-        if same_album:
-            t0 = time.monotonic()
-            if render(last_cover, meta_now, "同专辑"):
-                ms = (time.monotonic() - t0) * 1000
-                applog.log(f"[切歌] 同专辑快速路径 耗时 {ms:.0f}ms（不等封面）")
-                last_gen, last_meta = gen, meta_now
-                real = ipc.wait_cover(gen, timeout=6.0)  # 后台确认封面是否真的相同
-                if real and real != last_cover:
-                    applog.log("[切歌] 实际封面与上一首不同，补渲染")
-                    render(real, meta_now, "封面更新")
-                    last_cover = real
-                continue
+    # 配置热重载：设置窗口保存后立即重渲染当前曲目
+    try:
+        mt = os.path.getmtime(config.CONFIG_PATH)
+    except OSError:
+        mt = None
+    if state["cfg_mtime"] is None:
+        state["cfg_mtime"] = mt
+    elif mt != state["cfg_mtime"]:
+        state["cfg_mtime"] = mt
+        cfg.update(config.load())
+        applog.log("配置变更，热重载")
+        cover, meta = last_cover, last_meta
+        if cover is None and meta is None:  # 本实例还没渲染过：取当前曲目兜底
+            snap = ipc.snapshot()
+            if (snap["title"] or snap["filename"]) and snap["connected"]:
+                cover = ipc.cover_now(snap["cover_gen"])
+                if cover is None:
+                    cover = ipc.wait_cover(snap["cover_gen"], timeout=12.0)
+                meta = {**{k: snap[k] for k in ("title", "artist", "album")}, "filename": snap.get("filename"), "duration_ms": snap.get("duration_ms"), "samplerate": snap.get("samplerate"), "file_size": snap.get("file_size"), "bit_rate": snap.get("bit_rate")}
+                if cover is not None:
+                    state["cover"], state["meta"], state["gen"] = cover, meta, snap["cover_gen"]
+                    last_cover, last_meta, last_gen = cover, meta, snap["cover_gen"]
+        if cover is not None or meta is not None:
+            render(cover, meta, "热重载")
+        else:
+            applog.log("热重载：尚无曲目可渲染，跳过")
 
-        t_wait0 = time.monotonic()
-        cover = ipc.wait_cover(gen, timeout=12.0)  # 覆盖 10s 封面重试窗口
-        cover_ms = (time.monotonic() - t_wait0) * 1000
-        t_render0 = time.monotonic()
-        if render(cover, snap, "切歌"):
-            render_ms = (time.monotonic() - t_render0) * 1000
-            applog.log(f"[切歌] 耗时: 封面 {cover_ms:.0f}ms + 渲染换图 {render_ms:.0f}ms "
-                       f"= {cover_ms + render_ms:.0f}ms")
-            last_gen = gen
-            last_cover, last_meta = cover, meta_now
+    # 日/夜主题跟随：每 ~3s 查一次系统主题，翻转后用当前曲目重渲染
+    if cfg.get("theme_night_follow") and time.monotonic() - state["dark_t"] > 3.0:
+        state["dark_t"] = time.monotonic()
+        dark = wallpaper.system_is_dark()
+        if state["dark"] is None:
+            state["dark"] = dark
+        elif dark != state["dark"] and (last_cover is not None or last_meta is not None):
+            state["dark"] = dark
+            render(last_cover, last_meta, "主题切换")
+
+    # 暂停状态翻转：用当前曲目重渲染（pause_mode=off 时跳过）
+    if cfg.get("pause_mode", "off") != "off":
+        paused_now = ipc.snapshot().get("state") != 2  # 2=播放中，其余按暂停处理
+        flipped = paused_now != state["paused"]
+        state["paused"] = paused_now
+        if flipped and (last_cover is not None or last_meta is not None):
+            render(last_cover, last_meta, "暂停切换")
+
+    gen = ipc.wait_track_change(timeout=0.5)
+    if stop.is_set() or gen == last_gen or not ipc.snapshot()["connected"]:
+        return
+    snap = ipc.snapshot()
+    if not snap["title"] and not snap["filename"]:
+        return  # 元数据还没就绪，等下一轮
+    meta_now = {**{k: snap[k] for k in ("title", "artist", "album")}, "filename": snap.get("filename"), "duration_ms": snap.get("duration_ms"), "samplerate": snap.get("samplerate"), "file_size": snap.get("file_size"), "bit_rate": snap.get("bit_rate")}
+
+    # 同专辑连播：封面几乎必与上一首相同，先用上一张立即换壁纸，不等 AIMP 回图
+    same_album = (last_cover is not None and last_meta is not None and meta_now["album"]
+                  and meta_now["album"] == last_meta.get("album")
+                  and meta_now["artist"] == last_meta.get("artist"))
+    if same_album:
+        t0 = time.monotonic()
+        if render(last_cover, meta_now, "同专辑"):
+            ms = (time.monotonic() - t0) * 1000
+            applog.log(f"[切歌] 同专辑快速路径 耗时 {ms:.0f}ms（不等封面）")
+            state["gen"], state["meta"] = gen, meta_now
+            real = ipc.wait_cover(gen, timeout=6.0)  # 后台确认封面是否真的相同
+            if real and real != last_cover and ipc.snapshot()["cover_gen"] == gen:
+                applog.log("[切歌] 实际封面与上一首不同，补渲染")
+                render(real, meta_now, "封面更新")
+                state["cover"] = real
+            return
+
+    t_wait0 = time.monotonic()
+    cover = ipc.wait_cover(gen, timeout=12.0)  # 覆盖 10s 封面重试窗口
+    cover_ms = (time.monotonic() - t_wait0) * 1000
+    if ipc.snapshot()["cover_gen"] != gen:
+        return  # 等封面期间又切了歌：本轮作废，下一轮直接渲染最新曲目
+    t_render0 = time.monotonic()
+    if render(cover, snap, "切歌"):
+        render_ms = (time.monotonic() - t_render0) * 1000
+        applog.log(f"[切歌] 耗时: 封面 {cover_ms:.0f}ms + 渲染换图 {render_ms:.0f}ms "
+                   f"= {cover_ms + render_ms:.0f}ms")
+        state["gen"] = gen
+        state["cover"], state["meta"] = cover, meta_now
 
 
 def _acquire_single_instance_mutex() -> bool:

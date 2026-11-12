@@ -165,6 +165,7 @@ class AimpIPC(threading.Thread):
         self._cover_bytes = None
         self._cover_retry_until = 0.0
         self._cover_next_try = 0.0
+        self._cover_req_gen = 0        # 封面请求所属代数：拒收上一首的迟到回图
         self._cand_sig = None          # 去抖：候选签名
         self._cand_since = 0.0
         self._committed_sig = None     # 上次真正换代的签名
@@ -239,6 +240,7 @@ class AimpIPC(threading.Thread):
         with self._lock:
             self._cover_bytes = None
             self._cover_evt.clear()
+            self._cover_req_gen = self._gen
         now = time.time()
         self._cover_retry_until = now + 10.0
         self._cover_next_try = now + 0.05
@@ -313,9 +315,14 @@ class AimpIPC(threading.Thread):
         self._mapping = mapping
         self._buf = kernel32.MapViewOfFile(mapping, 4, 0, 0, 0)
         self._recv, self._wc = self._make_receiver()
-        if self._recv:
-            user32.SendMessageW(hwnd, WM_AIMP_COMMAND, CMD_REGISTER_NOTIFY, LPARAM(self._recv))
-            self._timer_id = user32.SetTimer(self._recv, 1, self._poll_ms, None)
+        if not self._recv:  # 接收窗建不起来：注册通知/轮询都没了，绝不能假装已连接
+            kernel32.UnmapViewOfFile(self._buf)
+            self._buf = None
+            self._mapping = None
+            self._aimp = None
+            return False
+        user32.SendMessageW(hwnd, WM_AIMP_COMMAND, CMD_REGISTER_NOTIFY, LPARAM(self._recv))
+        self._timer_id = user32.SetTimer(self._recv, 1, self._poll_ms, None)
         with self._lock:
             self._snap["connected"] = True
             self._snap["state"] = self._prop(P_STATE)
@@ -329,7 +336,8 @@ class AimpIPC(threading.Thread):
         wc.lpszClassName = "AIMP_WP_Receiver"
         wc.hInstance = kernel32.GetModuleHandleW(None)
         if not user32.RegisterClassW(byref(wc)):
-            return None, None
+            if ctypes.get_last_error() != 1410:  # 1410=类已注册：断线重连时复用已注册类
+                return None, None
         # message-only 窗口（实测能收 WM_COPYDATA 和 WM_AIMP_NOTIFY）
         hwnd = user32.CreateWindowExW(0, wc.lpszClassName, wc.lpszClassName, 0,
                                       0, 0, 0, 0, HWND(-3), None, wc.hInstance, None)
@@ -344,7 +352,8 @@ class AimpIPC(threading.Thread):
             if cds.dwData == ALBUMART_MAGIC and cds.cbData > 0:
                 data = string_at(cds.lpData, cds.cbData)
                 with self._lock:
-                    if not self._cover_evt.is_set():  # 还在等待期 → 收到即收
+                    # 只收当前代请求的回图：上一首请求的迟到回图直接丢弃（防封面串台）
+                    if not self._cover_evt.is_set() and self._cover_req_gen == self._gen:
                         self._cover_bytes = data
                         self._cover_evt.set()
             return 1
@@ -374,7 +383,7 @@ class AimpIPC(threading.Thread):
         r = user32.SendMessageTimeoutW(self._aimp, 0x0000, 0, 0,
                                        SMTO_ABORTIFHUNG, 300, byref(dummy))
         if not r:
-            self._drop_connection()
+            self._lose_aimp()  # AIMP 忙碌超 300ms ≠ 永久掉线：退泵重连
             return
         state = self._prop(P_STATE)
         pos = self._prop(P_POSITION)
@@ -398,8 +407,9 @@ class AimpIPC(threading.Thread):
                     self._try_cover_once()
 
     def _drop_connection(self):
-        if self._recv:
+        if self._aimp and self._recv:
             user32.SendMessageW(self._aimp, WM_AIMP_COMMAND, CMD_UNREGISTER_NOTIFY, LPARAM(self._recv))
+        if self._recv:
             user32.DestroyWindow(self._recv)
             self._recv = None
         if self._buf:
@@ -410,6 +420,20 @@ class AimpIPC(threading.Thread):
         with self._lock:
             self._snap["connected"] = False
             self._snap["state"] = STATE_NO_AIMP
+
+    def _lose_aimp(self):
+        """AIMP 探活超时（忙碌/退出中）：清连接状态并退消息泵，让 run() 重连。
+
+        绝不能在消息回调里直接 _drop_connection()：销毁接收窗口后 GetMessageW
+        永久阻塞，外层重连逻辑再也走不到——这是"偶发切歌不换壁纸、重启才恢复"
+        的根因（AIMP 读大文件/卡顿超过 300ms 探活超时即触发）。
+        """
+        self._aimp = None
+        with self._lock:
+            self._snap["connected"] = False
+            self._snap["state"] = STATE_NO_AIMP
+        if self._recv:
+            user32.PostMessageW(self._recv, 0x0012, 0, 0)  # WM_QUIT → 泵退出 → run() 重连
 
     def run(self):
         while not self._stop_evt.is_set():
@@ -422,6 +446,8 @@ class AimpIPC(threading.Thread):
                     user32.TranslateMessage(byref(msg))
                     user32.DispatchMessageW(byref(msg))
                 self._drop_connection()
+                if not self._stop_evt.is_set():
+                    self._stop_evt.wait(2.0)  # 探活失败刚退泵：AIMP 可能还在忙，别热循环重连
             else:
                 with self._lock:
                     self._snap["connected"] = False
