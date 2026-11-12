@@ -1,7 +1,10 @@
-"""设置窗口：壁纸 / 封面 / 歌名 / 歌手 / 专辑 / 歌曲信息 / 排版 / 面板 / 系统 九个标签页。
+"""设置窗口：壁纸 / 封面 / 排版 / 歌名 / 歌手 / 专辑 / 歌曲信息 / 面板 / 系统 九个标签页。
 
-结构：__init__ 只做窗口骨架；各页签由 _tab_* 方法构建；_save 按段落保存。
-新增控件时在对应 _tab_* 里加一行 _add_*，并在 _save 对应段落补一行。
+归类：画面（壁纸/封面）→ 文字（排版+四行）→ 悬浮部件（面板）→ 系统。
+每页相关选项用分组框（ttk.Labelframe）框起来，密集页用双列布局压短窗口。
+结构：__init__ 只做窗口骨架；各页签由 _tab_* 方法构建（_group 建分组框）；
+_save 按段落保存。新增控件：在对应 _tab_* 的分组框里加一行 _add_*，
+并在 _save 对应段落补一行。
 """
 from __future__ import annotations
 
@@ -43,7 +46,6 @@ LYRICS_LANG_ITEMS = [("简体中文优先", "zh-Hans"), ("繁体中文优先", "
 LYRICS_FOLLOW_ITEMS = [("跟随频谱面板", "panel"), ("跟随壁纸文字区", "anchor"), ("屏幕右下固定", "fixed")]
 LYRICS_WIDTH_CHOICES = [280, 320, 420, 520, 640]
 MARGIN_CHOICES = [4, 8, 10, 12, 16, 20, 24]
-LYRICS_GAP_CHOICES = [0, 4, 6, 8, 10, 12, 16]
 ANCHOR_GAP_CHOICES = [4, 8, 10, 14, 20]
 LINE_ITEMS = (("title", "歌名"), ("artist", "歌手"), ("album", "专辑"), ("info", "歌曲信息"))
 FONTS_FALLBACK = [
@@ -139,8 +141,8 @@ class SettingsWindow:
         nb = ttk.Notebook(self.win)
         nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         self._pages, self._rows = {}, {}
-        # 四行文字各自一页：单页行数太多会把窗口撑得太长
-        for name in ("壁纸", "封面", "歌名", "歌手", "专辑", "歌曲信息", "排版", "面板", "系统"):
+        # 页签按归类排序；四行文字各自一页，避免单页太长
+        for name in ("壁纸", "封面", "排版", "歌名", "歌手", "专辑", "歌曲信息", "面板", "系统"):
             f = ttk.Frame(nb, padding=10)
             nb.add(f, text=name)
             self._pages[name] = f
@@ -148,10 +150,10 @@ class SettingsWindow:
 
         self._tab_wallpaper()
         self._tab_cover()
+        self._tab_layout()
         for key, zh in LINE_ITEMS:
             self._tab_line(key, zh)
         self._refresh_order_labels()
-        self._tab_layout()
         self._tab_panel()
         self._tab_system()
 
@@ -178,6 +180,18 @@ class SettingsWindow:
             pass
 
     # ---------- 控件小工具 ----------
+
+    def _two_col(self, pg):
+        """双列布局：两列等宽。"""
+        pg.columnconfigure(0, weight=1, uniform="col")
+        pg.columnconfigure(1, weight=1, uniform="col")
+
+    def _group(self, pg, title: str, col: int = 0, row: int = 0, colspan: int = 1):
+        """分组框：相关选项框在一起，内部沿用 _rows 行计数（与页级同一套 _add_*）。"""
+        g = ttk.Labelframe(pg, text=title, padding=(8, 4))
+        g.grid(row=row, column=col, columnspan=colspan, sticky="new", padx=4, pady=(0, 8))
+        self._rows[g] = 0
+        return g
 
     def _add_widget(self, page, label, widget):
         r = self._rows[page]
@@ -261,164 +275,192 @@ class SettingsWindow:
 
     def _tab_wallpaper(self):
         cfg, pg = self.cfg, self._pages["壁纸"]
-        self.bg_style_var = self._add_labeled(pg, "背景方案", BG_CHOICES, cfg.get("bg_style", "blur"))
-        self.blur_type_var = self._add_labeled(pg, "模糊类型", BLUR_TYPE_ITEMS,
+        self._two_col(pg)
+        g_bg = self._group(pg, "背景与模糊", col=0)
+        self.bg_style_var = self._add_labeled(g_bg, "背景方案", BG_CHOICES, cfg.get("bg_style", "blur"))
+        self.blur_type_var = self._add_labeled(g_bg, "模糊类型", BLUR_TYPE_ITEMS,
                                                cfg.get("blur_type", "gauss"))
-        self.blur_var = self._add_combo(pg, "模糊强度(像素)", BLUR_CHOICES,
+        self.blur_var = self._add_combo(g_bg, "模糊强度(像素)", BLUR_CHOICES,
                                         int(cfg.get("blur_radius", 28)))
-        self.darken_var = self._add_pct_invert(pg, "背景压暗(%)", "darken", PCT_CHOICES,
+        self.darken_var = self._add_pct_invert(g_bg, "背景压暗(%)", "darken", PCT_CHOICES,
                                                float(cfg.get("darken", 0.75) or 0.75))
         self.fade_native_var = self._add_check(
-            pg, "壁纸过渡（Windows 原生淡入；系统本身已有过渡可关闭）", cfg.get("fade_native", True))
-        self.night_var = self._add_check(pg, "跟随系统日/夜主题（夜间叠黑色遮罩）",
+            g_bg, "壁纸过渡（Windows 原生淡入；系统本身已有过渡可关闭）", cfg.get("fade_native", True))
+        g_night = self._group(pg, "日/夜主题", col=1, row=0)
+        self.night_var = self._add_check(g_night, "跟随系统日/夜主题（夜间叠黑色遮罩）",
                                          cfg.get("theme_night_follow", False))
-        self.night_alpha_var = self._add_combo(pg, "夜间遮罩浓度(%)", PCT_CHOICES,
+        self.night_alpha_var = self._add_combo(g_night, "夜间遮罩浓度(%)", PCT_CHOICES,
                                                int(cfg.get("night_overlay", 30) or 30))
-        self.pause_mode_var = self._add_labeled(pg, "暂停显示", PAUSE_MODE_ITEMS,
+        g_pause = self._group(pg, "暂停反馈", col=1, row=1)
+        self.pause_mode_var = self._add_labeled(g_pause, "暂停显示", PAUSE_MODE_ITEMS,
                                                 cfg.get("pause_mode", "darken"))
-        self.pause_dark_var = self._add_combo(pg, "暂停压暗浓度(%)", PCT_CHOICES,
+        self.pause_dark_var = self._add_combo(g_pause, "暂停压暗浓度(%)", PCT_CHOICES,
                                               int(cfg.get("pause_darken", 30) or 30))
-        self.pause_scope_var = self._add_labeled(pg, "压暗范围", PAUSE_SCOPE_ITEMS,
+        self.pause_scope_var = self._add_labeled(g_pause, "压暗范围", PAUSE_SCOPE_ITEMS,
                                                  cfg.get("pause_darken_scope", "all"))
-        self.pause_shrink_var = self._add_check(pg, "暂停时封面缩小", cfg.get("pause_shrink", False))
-        self.pause_shrink_pct_var = self._add_combo(pg, "封面缩小幅度(%)", [5, 8, 10, 15, 20],
+        self.pause_shrink_var = self._add_check(g_pause, "暂停时封面缩小", cfg.get("pause_shrink", False))
+        self.pause_shrink_pct_var = self._add_combo(g_pause, "封面缩小幅度(%)", [5, 8, 10, 15, 20],
                                                     int(cfg.get("pause_shrink_pct", 8) or 8))
 
     # ---------- 封面页 ----------
 
     def _tab_cover(self):
         cfg, pg = self.cfg, self._pages["封面"]
-        self.cover_anchor_var = self._add_labeled(pg, "缩放基准", COVER_ANCHOR_ITEMS,
+        self._two_col(pg)
+        g_geo = self._group(pg, "大小与位置", col=0)
+        self.cover_anchor_var = self._add_labeled(g_geo, "缩放基准", COVER_ANCHOR_ITEMS,
                                                   cfg.get("cover_anchor", "left"))
-        self.cover_scale_var = self._add_combo(pg, "封面大小(倍率)", SCALE_CHOICES,
+        self.cover_scale_var = self._add_combo(g_geo, "封面大小(倍率)", SCALE_CHOICES,
                                                cfg.get("cover_scale", 1.0) or 1.0)
-        self.cover_dx_var = self._add_combo(pg, "封面 X 偏移(像素)", OFFSET_CHOICES,
+        self.cover_dx_var = self._add_combo(g_geo, "封面 X 偏移(像素)", OFFSET_CHOICES,
                                             int(cfg.get("cover_offset_x", 0) or 0))
-        self.cover_dy_var = self._add_combo(pg, "封面 Y 偏移(像素)", OFFSET_CHOICES,
+        self.cover_dy_var = self._add_combo(g_geo, "封面 Y 偏移(像素)", OFFSET_CHOICES,
                                             int(cfg.get("cover_offset_y", 0) or 0))
-        self.cover_margin_var = self._add_combo(pg, "封面左边距(%)", MARGIN_CHOICES,
+        self.cover_margin_var = self._add_combo(g_geo, "封面左边距(%)", MARGIN_CHOICES,
                                                 round(float(cfg.get("cover_margin_ratio", 0.12)
                                                              or 0.12) * 100), readonly=True)
-        self.cover_radius_var = self._add_labeled(pg, "封面圆角(像素)", COVER_RADIUS_ITEMS,
+        g_look = self._group(pg, "圆角·阴影·描边", col=1)
+        self.cover_radius_var = self._add_labeled(g_look, "封面圆角(像素)", COVER_RADIUS_ITEMS,
                                                   int(cfg.get("cover_radius", 0) or 0))
-        self.cover_sa_var = self._add_combo(pg, "封面阴影浓度", SHADOW_ALPHA_CHOICES,
+        self.cover_sa_var = self._add_combo(g_look, "封面阴影浓度", SHADOW_ALPHA_CHOICES,
                                             int(cfg.get("cover_shadow_alpha", 130) or 0))
-        self.cover_so_var = self._add_combo(pg, "封面阴影偏移(像素)", SHADOW_OFFSET_CHOICES,
+        self.cover_so_var = self._add_combo(g_look, "封面阴影偏移(像素)", SHADOW_OFFSET_CHOICES,
                                             int(cfg.get("cover_shadow_offset", 40) or 40))
-        self.cover_sw_var = self._add_combo(pg, "封面描边宽(像素)", COVER_STROKE_CHOICES,
+        self.cover_sw_var = self._add_combo(g_look, "封面描边宽(像素)", COVER_STROKE_CHOICES,
                                             int(cfg.get("cover_stroke_w", 0) or 0))
-        self.cover_sc_var = self._add_color(pg, "封面描边色", "cover_stroke_color", "#000000")
+        self.cover_sc_var = self._add_color(g_look, "封面描边色", "cover_stroke_color", "#000000")
 
     # ---------- 行页（歌名/歌手/专辑/歌曲信息 各自一页） ----------
 
     def _tab_line(self, key: str, zh: str):
         cfg, pg = self.cfg, self._pages[zh]
+        self._two_col(pg)
         v = {}
-        v["order_lbl"] = ttk.Label(pg, text="", foreground="#4C8BF5")
-        self._add_widget(pg, "当前顺序", v["order_lbl"])
-        v["show"] = self._add_check(pg, "显示这一行", cfg.get(f"{key}_show", True))
-        v["size"] = self._add_combo(pg, "字号(像素)", SIZE_CHOICES,
-                                    self._px_of(f"{key}_size_ratio",
-                                                0.075 if key == "title" else 0.042))
-        v["font"] = self._add_combo(pg, "字体",
-                                    [self._default_label] + [lb for lb, _ in self._fonts],
-                                    self._file_to_label.get(cfg.get(f"{key}_font_file"),
-                                                            self._default_label),
-                                    width=28, readonly=True)
-        v["color"] = self._add_color(pg, "颜色", f"{key}_color", "#FFFFFF")
-        v["of"] = self._add_labeled(pg, "过长", OVERFLOW_ITEMS,
-                                    cfg.get(f"{key}_overflow",
-                                            "wrap" if key == "title" else "ellipsis"))
-        v["space_w"] = self._add_labeled(pg, "空格断行(字符)", SPACE_WRAP_ITEMS,
-                                         str(int(cfg.get(f"{key}_space_window", 5) or 0)))
-        v["bold"] = self._add_check(pg, "加粗", cfg.get(f"{key}_bold", key == "title"))
-        v["shadow"] = self._add_check(pg, "阴影", cfg.get(f"{key}_shadow", True))
-        v["stroke_w"] = self._add_combo(pg, "描边宽(像素)", STROKE_CHOICES,
-                                        int(cfg.get(f"{key}_stroke_w", 0) or 0))
-        v["stroke_color"] = self._add_color(pg, "描边色", f"{key}_stroke_color", "#000000")
+        # 左上：显示与顺序
+        g_show = self._group(pg, "显示与顺序", col=0, row=0)
+        v["order_lbl"] = ttk.Label(g_show, text="", foreground="#4C8BF5")
+        self._add_widget(g_show, "当前顺序", v["order_lbl"])
+        v["show"] = self._add_check(g_show, "显示这一行", cfg.get(f"{key}_show", True))
         # 行顺序：上移/下移按钮（改 line_order，保存即按新顺序重渲染）
-        f_btns = ttk.Frame(pg)
+        f_btns = ttk.Frame(g_show)
         ttk.Button(f_btns, text="上移 ↑", width=7,
                    command=lambda k=key: self._move_line(k, -1)).pack(side="left", padx=(0, 6))
         ttk.Button(f_btns, text="下移 ↓", width=7,
                    command=lambda k=key: self._move_line(k, 1)).pack(side="left")
-        self._add_widget(pg, "行顺序", f_btns)
+        self._add_widget(g_show, "行顺序", f_btns)
+        # 右上：字体与字号
+        g_font = self._group(pg, "字体与字号", col=1, row=0)
+        v["size"] = self._add_combo(g_font, "字号(像素)", SIZE_CHOICES,
+                                    self._px_of(f"{key}_size_ratio",
+                                                0.075 if key == "title" else 0.042))
+        v["font"] = self._add_combo(g_font, "字体",
+                                    [self._default_label] + [lb for lb, _ in self._fonts],
+                                    self._file_to_label.get(cfg.get(f"{key}_font_file"),
+                                                            self._default_label),
+                                    width=28, readonly=True)
+        v["bold"] = self._add_check(g_font, "加粗", cfg.get(f"{key}_bold", key == "title"))
+        # 左下：颜色与效果
+        g_fx = self._group(pg, "颜色与效果", col=0, row=1)
+        v["color"] = self._add_color(g_fx, "颜色", f"{key}_color", "#FFFFFF")
+        v["shadow"] = self._add_check(g_fx, "阴影", cfg.get(f"{key}_shadow", True))
+        v["stroke_w"] = self._add_combo(g_fx, "描边宽(像素)", STROKE_CHOICES,
+                                        int(cfg.get(f"{key}_stroke_w", 0) or 0))
+        v["stroke_color"] = self._add_color(g_fx, "描边色", f"{key}_stroke_color", "#000000")
+        # 右下：过长与断行
+        g_of = self._group(pg, "过长与断行", col=1, row=1)
+        v["of"] = self._add_labeled(g_of, "过长", OVERFLOW_ITEMS,
+                                    cfg.get(f"{key}_overflow",
+                                            "wrap" if key == "title" else "ellipsis"))
+        v["space_w"] = self._add_labeled(g_of, "空格断行(字符)", SPACE_WRAP_ITEMS,
+                                         str(int(cfg.get(f"{key}_space_window", 5) or 0)))
         self._line_vars[key] = v
-        if key == "info":  # 歌曲信息页尾部：展示模板（token 见 config 注释）
+        if key == "info":  # 歌曲信息页底部通栏：展示模板（token 见 config 注释）
+            g_tpl = self._group(pg, "歌曲信息模板", col=0, row=2, colspan=2)
             self._info_tpl_var = tk.StringVar(value=str(self.cfg.get(
                 "info_template", "{format} {samplerate} {bitrate} {bits}")))
-            self._add_widget(pg, "信息模板",
-                             ttk.Entry(pg, textvariable=self._info_tpl_var, width=34))
+            self._add_widget(g_tpl, "模板",
+                             ttk.Entry(g_tpl, textvariable=self._info_tpl_var, width=34))
 
     # ---------- 排版页 ----------
 
     def _tab_layout(self):
         cfg, pg = self.cfg, self._pages["排版"]
-        self.show_text_var = self._add_check(pg, "显示文字内容（总开关）", cfg.get("show_text", True))
-        self.tsg_var = self._add_combo(pg, "歌名行后间距(像素)", GAP_CHOICES,
+        self._two_col(pg)
+        g_gap = self._group(pg, "总开关与行间距", col=0)
+        self.show_text_var = self._add_check(g_gap, "显示文字内容（总开关）", cfg.get("show_text", True))
+        self.tsg_var = self._add_combo(g_gap, "歌名行后间距(像素)", GAP_CHOICES,
                                        self._px_of("title_sub_gap_ratio", 0.02))
-        self.tlg_var = self._add_combo(pg, "歌名折行间距(像素)", GAP_CHOICES,
+        self.tlg_var = self._add_combo(g_gap, "歌名折行间距(像素)", GAP_CHOICES,
                                        self._px_of("title_line_gap_ratio", 0.012))
-        self.slg_var = self._add_combo(pg, "歌手/专辑/信息行间距(像素)", GAP_CHOICES,
+        self.slg_var = self._add_combo(g_gap, "歌手/专辑/信息行间距(像素)", GAP_CHOICES,
                                        self._px_of("sub_line_gap_ratio", 0.014))
-        self.text_dx_var = self._add_combo(pg, "文字 X 偏移(像素)", OFFSET_CHOICES,
+        g_pos = self._group(pg, "位置与对齐", col=1)
+        self.text_dx_var = self._add_combo(g_pos, "文字 X 偏移(像素)", OFFSET_CHOICES,
                                            int(cfg.get("text_offset_x", 0) or 0))
-        self.text_dy_var = self._add_combo(pg, "文字 Y 偏移(像素)", OFFSET_CHOICES,
+        self.text_dy_var = self._add_combo(g_pos, "文字 Y 偏移(像素)", OFFSET_CHOICES,
                                            int(cfg.get("text_offset_y", 0) or 0))
-        self.text_align_var = self._add_labeled(pg, "文字水平对齐", ALIGN_ITEMS,
+        self.text_align_var = self._add_labeled(g_pos, "文字水平对齐", ALIGN_ITEMS,
                                                 cfg.get("text_align", "left"))
-        self.text_valign_var = self._add_labeled(pg, "文字垂直对齐", VALIGN_ITEMS,
+        self.text_valign_var = self._add_labeled(g_pos, "文字垂直对齐", VALIGN_ITEMS,
                                                  cfg.get("text_valign", "center"))
 
     # ---------- 面板页（频谱 + 歌词） ----------
 
     def _tab_panel(self):
         cfg, pg = self.cfg, self._pages["面板"]
-        self.vis_show_var = self._add_check(pg, "显示频谱面板", not cfg.get("vis_hidden", False))
-        self.vis_w_var = self._add_combo(pg, "面板宽度(像素)", [280, 320, 420, 520, 640],
+        self._two_col(pg)
+        # 左列：频谱面板 + 歌词窗位置
+        g_vis = self._group(pg, "频谱面板", col=0, row=0)
+        self.vis_show_var = self._add_check(g_vis, "显示频谱面板", not cfg.get("vis_hidden", False))
+        self.vis_w_var = self._add_combo(g_vis, "面板宽度(像素)", [280, 320, 420, 520, 640],
                                          int(cfg.get("vis_width", 420) or 420), readonly=True)
-        self.vis_h_var = self._add_combo(pg, "面板高度(像素)", [80, 100, 120, 160, 200],
+        self.vis_h_var = self._add_combo(g_vis, "面板高度(像素)", [80, 100, 120, 160, 200],
                                          int(cfg.get("vis_height", 120) or 120), readonly=True)
-        self.fps_var = self._add_combo(pg, "刷新率(FPS)", FPS_CHOICES,
+        self.fps_var = self._add_combo(g_vis, "刷新率(FPS)", FPS_CHOICES,
                                        int(cfg.get("vis_fps", 30) or 30))
-        self.lock_var = self._add_check(pg, "锁定频谱面板（禁拖动，仍跟随壁纸）", cfg.get("vis_locked"))
-        self.vis_gap_var = self._add_combo(pg, "面板与文字区间距(像素)", ANCHOR_GAP_CHOICES,
+        self.lock_var = self._add_check(g_vis, "锁定频谱面板（禁拖动，仍跟随壁纸）", cfg.get("vis_locked"))
+        self.vis_gap_var = self._add_combo(g_vis, "面板与文字区间距(像素)", ANCHOR_GAP_CHOICES,
                                            int(cfg.get("vis_anchor_gap", 10) or 10))
-        self.lyr_show_var = self._add_check(pg, "显示歌词", not cfg.get("lyrics_hidden", False))
-        self.lyr_follow_var = self._add_labeled(pg, "歌词跟随", LYRICS_FOLLOW_ITEMS,
+        g_lyr_pos = self._group(pg, "歌词窗·位置与显示", col=0, row=1)
+        self.lyr_show_var = self._add_check(g_lyr_pos, "显示歌词", not cfg.get("lyrics_hidden", False))
+        self.lyr_follow_var = self._add_labeled(g_lyr_pos, "歌词跟随", LYRICS_FOLLOW_ITEMS,
                                                 cfg.get("lyrics_follow", "panel"))
-        self.lyr_w_var = self._add_combo(pg, "歌词窗宽度(像素)", LYRICS_WIDTH_CHOICES,
+        self.lyr_w_var = self._add_combo(g_lyr_pos, "歌词窗宽度(像素)", LYRICS_WIDTH_CHOICES,
                                          int(cfg.get("lyrics_width", 420) or 420), readonly=True)
-        self.lyr_side_var = self._add_labeled(pg, "歌词位置", LYRICS_SIDE_ITEMS,
+        self.lyr_side_var = self._add_labeled(g_lyr_pos, "歌词位置", LYRICS_SIDE_ITEMS,
                                               cfg.get("lyrics_side", "below"))
-        self.lyr_gap_var = self._add_combo(pg, "歌词间距(像素)", LYRICS_GAP_CHOICES,
+        self.lyr_gap_var = self._add_combo(g_lyr_pos, "歌词间距(像素)", LYRICS_GAP_CHOICES,
                                            int(cfg.get("lyrics_gap", 6) or 6))
-        self.lyr_lang_var = self._add_labeled(pg, "歌词多语言优先", LYRICS_LANG_ITEMS,
-                                              cfg.get("lyrics_lang_pref", "zh-Hans"))
-        self.lyr_trans_var = self._add_check(pg, "显示当前行译文", cfg.get("lyrics_show_trans", True))
-        self.lyr_next_var = self._add_check(pg, "显示下一行原文", cfg.get("lyrics_show_next", True))
-        self.lyr_lock_var = self._add_check(pg, "锁定歌词窗（禁拖动，仍跟随壁纸）",
+        self.lyr_lock_var = self._add_check(g_lyr_pos, "锁定歌词窗（禁拖动，仍跟随壁纸）",
                                             cfg.get("lyrics_locked", False))
-        self.lyr_font_var = self._add_combo(pg, "歌词字体",
+        # 右列：歌词窗内容 + 样式
+        g_lyr_ct = self._group(pg, "歌词窗·内容", col=1, row=0)
+        self.lyr_lang_var = self._add_labeled(g_lyr_ct, "歌词多语言优先", LYRICS_LANG_ITEMS,
+                                              cfg.get("lyrics_lang_pref", "zh-Hans"))
+        self.lyr_trans_var = self._add_check(g_lyr_ct, "显示当前行译文", cfg.get("lyrics_show_trans", True))
+        self.lyr_next_var = self._add_check(g_lyr_ct, "显示下一行原文", cfg.get("lyrics_show_next", True))
+        g_lyr_fx = self._group(pg, "歌词窗·样式", col=1, row=1)
+        self.lyr_font_var = self._add_combo(g_lyr_fx, "歌词字体",
                                             [self._default_label] + [lb for lb, _ in self._fonts],
                                             self._file_to_label.get(cfg.get("lyrics_font_file"),
                                                                     self._default_label),
                                             width=28, readonly=True)
-        self.lyr_px_var = self._add_combo(pg, "歌词字号(像素)", SIZE_CHOICES,
+        self.lyr_px_var = self._add_combo(g_lyr_fx, "歌词字号(像素)", SIZE_CHOICES,
                                           self._px_of("lyrics_size_ratio", 0.032))
-        self.lyr_color_var = self._add_color(pg, "歌词颜色", "lyrics_color", "#FFFFFF")
-        self.lyr_next_color_var = self._add_color(pg, "下一行颜色", "lyrics_next_color", "#B0B0B0")
-        self.lyr_sw_var = self._add_combo(pg, "歌词描边宽(像素)", STROKE_CHOICES,
+        self.lyr_color_var = self._add_color(g_lyr_fx, "歌词颜色", "lyrics_color", "#FFFFFF")
+        self.lyr_next_color_var = self._add_color(g_lyr_fx, "下一行颜色", "lyrics_next_color", "#B0B0B0")
+        self.lyr_sw_var = self._add_combo(g_lyr_fx, "歌词描边宽(像素)", STROKE_CHOICES,
                                           int(cfg.get("lyrics_stroke_w", 2) or 0))
-        self.lyr_sc_var = self._add_color(pg, "歌词描边色", "lyrics_stroke_color", "#000000")
-        self.lyr_shadow_var = self._add_check(pg, "歌词阴影", cfg.get("lyrics_shadow", True))
+        self.lyr_sc_var = self._add_color(g_lyr_fx, "歌词描边色", "lyrics_stroke_color", "#000000")
+        self.lyr_shadow_var = self._add_check(g_lyr_fx, "歌词阴影", cfg.get("lyrics_shadow", True))
 
     # ---------- 系统页 ----------
 
     def _tab_system(self):
         cfg, pg = self.cfg, self._pages["系统"]
-        self.autostart_var = self._add_check(pg, "开机自启动", autostart_enabled())
-        self.restore_var = self._add_check(pg, "退出时恢复原壁纸", cfg.get("restore_on_quit", True))
+        g = self._group(pg, "常规")
+        self.autostart_var = self._add_check(g, "开机自启动", autostart_enabled())
+        self.restore_var = self._add_check(g, "退出时恢复原壁纸", cfg.get("restore_on_quit", True))
 
     def _int(self, var, key, lo, hi, ratio=False, label=""):
         try:
