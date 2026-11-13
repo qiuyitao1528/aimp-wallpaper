@@ -251,8 +251,18 @@ def register_overlay(hwnd) -> None:
         _overlays.append(h)
 
 
+def unregister_overlay(hwnd) -> None:
+    """注销覆盖窗口（面板重建/销毁时调用，防止死 hwnd 堵住 z-order 编排）。"""
+    try:
+        _overlays.remove(int(hwnd))
+    except ValueError:
+        pass
+
+
 def seat_overlays() -> bool:
     """把 Progman 插到所有已登记覆盖窗口之下；z-order 已正确时零写操作。"""
+    global _overlays
+    _overlays = [h for h in _overlays if user32.IsWindow(HWND_T(h))]  # 剪枝已销毁的 hwnd
     progman = user32.FindWindowW("Progman", None)
     if not progman or not _overlays:
         return False

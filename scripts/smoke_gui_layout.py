@@ -55,17 +55,41 @@ for i, name in enumerate(names):
 
 # 保存链路：把 CONFIG_PATH 指到临时文件再 _save
 config.CONFIG_PATH = os.path.join(TMP, "config.json")
+# 跟随模式切换清拖动残留：panel→文字区 时 lyrics_pos 必须被清掉
+win.cfg["lyrics_pos"] = [100, 100]
+win.lyr_follow_var.set("跟随壁纸文字区")
 win._save()
+residue_cleared = win.cfg.get("lyrics_pos") is None
+# 不切换模式时残留保留（粘滞语义不破坏）
+win.cfg["lyrics_pos"] = [200, 200]
+win._save()
+residue_kept = win.cfg.get("lyrics_pos") == [200, 200]
 ok_saved = os.path.exists(config.CONFIG_PATH)
 
 # 关键变量存在性
 missing = [a for a in ("bg_style_var", "pause_shrink_pct_var", "show_text_var", "lyr_side_var",
                        "lyr_gap_var", "vis_gap_var", "_info_tpl_var") if not hasattr(win, a)]
+# 数值下拉允许自由输入（readonly 已去除）
+def find_combo(parent, var):
+    for c in parent.winfo_children():
+        if isinstance(c, ttk.Combobox) and str(c.cget("textvariable")) == str(var):
+            return c
+        r = find_combo(c, var)
+        if r:
+            return r
+    return None
+
+free_input = all(find_combo(win._pages[pn], v) is not None
+                 and find_combo(win._pages[pn], v).cget("state") != "readonly"
+                 for pn, v in (("面板", win.vis_w_var), ("面板", win.vis_h_var),
+                               ("面板", win.lyr_w_var), ("封面", win.cover_margin_var)))
 print("pages:", list(win._pages.keys()))
-print("save_ok:", ok_saved, "missing_vars:", missing)
+print("save_ok:", ok_saved, "residue_cleared:", residue_cleared, "residue_kept:", residue_kept,
+      "free_input:", free_input, "missing_vars:", missing)
 print("shots:", len(shots))
 for p in shots:
     print("  ", p)
-print("RESULT:", "ALL_PASS" if ok_saved and not missing else "FAILED")
+ok = ok_saved and residue_cleared and residue_kept and free_input and not missing
+print("RESULT:", "ALL_PASS" if ok else "FAILED")
 toplevel.destroy()
 root.destroy()

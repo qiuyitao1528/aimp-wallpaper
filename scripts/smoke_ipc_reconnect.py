@@ -13,12 +13,15 @@ from aimp_wallpaper.aimp_api import AimpIPC, user32, wintypes
 
 ok = True
 
-# 1) 类已注册复用：同一实例连续建两个接收窗
+# 1) 类已注册复用：同一实例连续建两个接收窗（进程级唯一回调 + hwnd 路由登记）
 ipc = AimpIPC(poll_ms=200)
-h1, wc1 = ipc._make_receiver()
-h2, wc2 = ipc._make_receiver()
+h1 = ipc._make_receiver()
+h2 = ipc._make_receiver()
 if h1 and h2:
-    print(f"[PASS] 类复用: hwnd1={h1:#x} hwnd2={h2:#x}")
+    from aimp_wallpaper import aimp_api
+    routed = aimp_api._BY_HWND.get(h1) is ipc and aimp_api._BY_HWND.get(h2) is ipc
+    print(f"[PASS] 类复用: hwnd1={h1:#x} hwnd2={h2:#x} 路由登记={'OK' if routed else '缺失'}")
+    ok = ok and routed
 else:
     print(f"[FAIL] 类复用失败: hwnd1={h1} hwnd2={h2}（1410 未被容忍？）")
     ok = False

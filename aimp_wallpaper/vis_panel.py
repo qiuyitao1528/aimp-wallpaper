@@ -249,6 +249,21 @@ class VisPanel:
         self.win.deiconify()
         self._seat_above_desktop()
 
+    def shutdown(self):
+        """彻底销毁面板（设置改宽高后重建用）：停频谱采集线程 + 注销覆盖层 + 关窗。"""
+        try:
+            self.spec.stop()
+        except Exception:
+            pass
+        try:
+            desktop.unregister_overlay(self._hwnd)
+        except Exception:
+            pass
+        try:
+            self.win.destroy()
+        except Exception:
+            pass
+
     def _reset_pos(self):
         self.cfg["vis_pos"] = None
         config.save(self.cfg)
@@ -278,6 +293,7 @@ class VisPanel:
         peak_drop = PEAK_DROP_SEC * frame_s
         if time.monotonic() - getattr(self, "_last_maint", t0 - 1.0) >= 1.0:
             self._last_maint = t0  # ~1s：z-order 校验（错位才跨进程调）+ 锚点跟随
+            self._lock_var.set(bool(self.cfg.get("vis_locked")))  # 设置里改锁定后同步右键菜单
             self._seat_above_desktop()
             self._follow_anchor()
         target, prev_t, t_prev, t_curr = self.spec.interp_snapshot()

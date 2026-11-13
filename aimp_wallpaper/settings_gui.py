@@ -318,7 +318,7 @@ class SettingsWindow:
                                             int(cfg.get("cover_offset_y", 0) or 0))
         self.cover_margin_var = self._add_combo(g_geo, "封面左边距(%)", MARGIN_CHOICES,
                                                 round(float(cfg.get("cover_margin_ratio", 0.12)
-                                                             or 0.12) * 100), readonly=True)
+                                                             or 0.12) * 100))
         g_look = self._group(pg, "圆角·阴影·描边", col=1)
         self.cover_radius_var = self._add_labeled(g_look, "封面圆角(像素)", COVER_RADIUS_ITEMS,
                                                   int(cfg.get("cover_radius", 0) or 0))
@@ -413,9 +413,9 @@ class SettingsWindow:
         g_vis = self._group(pg, "频谱面板", col=0, row=0)
         self.vis_show_var = self._add_check(g_vis, "显示频谱面板", not cfg.get("vis_hidden", False))
         self.vis_w_var = self._add_combo(g_vis, "面板宽度(像素)", [280, 320, 420, 520, 640],
-                                         int(cfg.get("vis_width", 420) or 420), readonly=True)
+                                         int(cfg.get("vis_width", 420) or 420))
         self.vis_h_var = self._add_combo(g_vis, "面板高度(像素)", [80, 100, 120, 160, 200],
-                                         int(cfg.get("vis_height", 120) or 120), readonly=True)
+                                         int(cfg.get("vis_height", 120) or 120))
         self.fps_var = self._add_combo(g_vis, "刷新率(FPS)", FPS_CHOICES,
                                        int(cfg.get("vis_fps", 30) or 30))
         self.lock_var = self._add_check(g_vis, "锁定频谱面板（禁拖动，仍跟随壁纸）", cfg.get("vis_locked"))
@@ -423,10 +423,11 @@ class SettingsWindow:
                                            int(cfg.get("vis_anchor_gap", 10) or 10))
         g_lyr_pos = self._group(pg, "歌词窗·位置与显示", col=0, row=1)
         self.lyr_show_var = self._add_check(g_lyr_pos, "显示歌词", not cfg.get("lyrics_hidden", False))
+        self._lyr_follow_prev = cfg.get("lyrics_follow", "panel")  # 保存时检测模式切换（清拖动残留）
         self.lyr_follow_var = self._add_labeled(g_lyr_pos, "歌词跟随", LYRICS_FOLLOW_ITEMS,
                                                 cfg.get("lyrics_follow", "panel"))
         self.lyr_w_var = self._add_combo(g_lyr_pos, "歌词窗宽度(像素)", LYRICS_WIDTH_CHOICES,
-                                         int(cfg.get("lyrics_width", 420) or 420), readonly=True)
+                                         int(cfg.get("lyrics_width", 420) or 420))
         self.lyr_side_var = self._add_labeled(g_lyr_pos, "歌词位置", LYRICS_SIDE_ITEMS,
                                               cfg.get("lyrics_side", "below"))
         self.lyr_gap_var = self._add_combo(g_lyr_pos, "歌词间距(像素)", LYRICS_GAP_CHOICES,
@@ -543,6 +544,10 @@ class SettingsWindow:
         self.cfg["lyrics_hidden"] = not self.lyr_show_var.get()
         self.cfg["lyrics_locked"] = self.lyr_lock_var.get()
         self.cfg["lyrics_follow"] = dict(LYRICS_FOLLOW_ITEMS).get(self.lyr_follow_var.get(), "panel")
+        # 跟随模式切换时清拖动残留：残留坐标会压过新跟随（"改了跟随没反应"的根因）
+        if self.cfg["lyrics_follow"] != self._lyr_follow_prev and self.cfg["lyrics_follow"] != "fixed":
+            self.cfg["lyrics_pos"] = None
+        self._lyr_follow_prev = self.cfg["lyrics_follow"]
         self.cfg["lyrics_side"] = dict(LYRICS_SIDE_ITEMS).get(self.lyr_side_var.get(), "below")
         self._int(self.lyr_w_var, "lyrics_width", 200, 1000, label="歌词窗宽度")
         self._int(self.lyr_gap_var, "lyrics_gap", 0, 100, label="歌词间距")

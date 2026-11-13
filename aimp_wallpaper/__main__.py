@@ -258,6 +258,41 @@ def main():
     except Exception:
         applog.log_exc("歌词窗创建失败:\n", *sys.exc_info())
 
+    # 面板配置监视：设置里改 面板宽度/高度/显示频谱面板 后 1s 内生效。
+    # VisPanel 只在创建时读宽高，尺寸变化必须停采集线程后整体重建；
+    # 可见状态下任何变化都重建（语义最稳），隐藏状态下只收起不重建。
+    _panel_state = {"sig": None}
+
+    def _watch_panel():
+        try:
+            w = int(cfg.get("vis_width", 420) or 420)
+            h = int(cfg.get("vis_height", 120) or 120)
+            hidden = bool(cfg.get("vis_hidden"))
+            sig = (w, h, hidden)
+            prev = _panel_state["sig"]
+            if prev is None:
+                _panel_state["sig"] = sig
+                return
+            if sig == prev:
+                return
+            _panel_state["sig"] = sig
+            p = panel["obj"]
+            if hidden:
+                if p is not None:
+                    p.win.withdraw()  # 不走 hide()：不回写 cfg
+            else:
+                if p is not None:
+                    p.shutdown()
+                    panel["obj"] = None
+                show_vis()
+        except Exception:
+            applog.log_exc("面板配置监视异常:\n", *sys.exc_info())
+        root.after(1000, _watch_panel)
+
+    _panel_state["sig"] = (int(cfg.get("vis_width", 420) or 420),
+                           int(cfg.get("vis_height", 120) or 120), bool(cfg.get("vis_hidden")))
+    root.after(1000, _watch_panel)
+
     def toggle_lyrics():
         cfg["lyrics_hidden"] = not bool(cfg.get("lyrics_hidden"))
         config.save(cfg)  # 歌词窗 _tick 自管理显隐

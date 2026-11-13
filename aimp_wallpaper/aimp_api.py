@@ -13,10 +13,13 @@
 from __future__ import annotations
 
 import ctypes
+import sys
 import threading
 import time
 from ctypes import POINTER, byref, c_int, c_ssize_t, c_size_t, c_void_p, cast, string_at
 from ctypes import wintypes
+
+from . import applog
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -98,6 +101,42 @@ AIMP_CLASS = "AIMP2_RemoteInfo"
 SHARED_SIZE = 2048
 STR_FIELDS = ("album", "artist", "date", "filename", "genre", "title")  # 0x28 起 + 0x58 起，顺序实测确认
 
+# 接收窗类进程级注册：WNDPROC 回调对象必须与窗口类同寿命（只建一次，永不释放）。
+# 此前重连时每次新建回调并覆盖引用，类里登记的旧回调被 GC 后，WM_TIMER 派发
+# 跳进已释放内存 → access violation（实测地址 0x113=WM_TIMER），IPC 线程整体死亡。
+_RECV_CLASS = "AIMP_WP_Receiver"
+_BY_HWND: dict = {}     # hwnd -> AimpIPC 实例（消息路由）
+_CLASS_OK = False
+_WNDPROC_CB = None
+
+
+def _receiver_dispatch(hwnd, msg, wparam, lparam):
+    """进程级消息派发：按 hwnd 路由到实例；单条消息异常落日志，不崩线程。"""
+    ipc = _BY_HWND.get(hwnd)
+    if ipc is None:
+        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+    try:
+        return ipc._wndproc(hwnd, msg, wparam, lparam)
+    except Exception:
+        applog.log_exc("接收窗消息处理异常:\n", *sys.exc_info())
+        return 0
+
+
+def _ensure_receiver_class() -> bool:
+    global _CLASS_OK, _WNDPROC_CB
+    if _CLASS_OK:
+        return True
+    if _WNDPROC_CB is None:
+        _WNDPROC_CB = WNDPROC(_receiver_dispatch)
+    wc = WNDCLASSW()
+    wc.lpfnWndProc = _WNDPROC_CB
+    wc.lpszClassName = _RECV_CLASS
+    wc.hInstance = kernel32.GetModuleHandleW(None)
+    if not user32.RegisterClassW(byref(wc)) and ctypes.get_last_error() != 1410:
+        return False
+    _CLASS_OK = True
+    return True
+
 
 def _clean_text(s: str) -> str:
     """清掉常见渲染成豆腐块的字符：PUA、emoji 增补区、变体选择符、零宽字符。"""
@@ -171,7 +210,6 @@ class AimpIPC(threading.Thread):
         self._committed_sig = None     # 上次真正换代的签名
         self._aimp = None
         self._recv = None
-        self._wc = None
         self._mapping = None
         self._buf = None
         self._timer_id = 0
@@ -314,7 +352,7 @@ class AimpIPC(threading.Thread):
             return False
         self._mapping = mapping
         self._buf = kernel32.MapViewOfFile(mapping, 4, 0, 0, 0)
-        self._recv, self._wc = self._make_receiver()
+        self._recv = self._make_receiver()
         if not self._recv:  # 接收窗建不起来：注册通知/轮询都没了，绝不能假装已连接
             kernel32.UnmapViewOfFile(self._buf)
             self._buf = None
@@ -331,20 +369,19 @@ class AimpIPC(threading.Thread):
         return True
 
     def _make_receiver(self):
-        wc = WNDCLASSW()
-        wc.lpfnWndProc = WNDPROC(self._wndproc)
-        wc.lpszClassName = "AIMP_WP_Receiver"
-        wc.hInstance = kernel32.GetModuleHandleW(None)
-        if not user32.RegisterClassW(byref(wc)):
-            if ctypes.get_last_error() != 1410:  # 1410=类已注册：断线重连时复用已注册类
-                return None, None
+        """建接收窗（message-only）。返回 hwnd 或 None；类与回调均进程级唯一。"""
+        if not _ensure_receiver_class():
+            return None
+        hinst = kernel32.GetModuleHandleW(None)
         # message-only 窗口（实测能收 WM_COPYDATA 和 WM_AIMP_NOTIFY）
-        hwnd = user32.CreateWindowExW(0, wc.lpszClassName, wc.lpszClassName, 0,
-                                      0, 0, 0, 0, HWND(-3), None, wc.hInstance, None)
+        hwnd = user32.CreateWindowExW(0, _RECV_CLASS, _RECV_CLASS, 0,
+                                      0, 0, 0, 0, HWND(-3), None, hinst, None)
         if not hwnd:
-            hwnd = user32.CreateWindowExW(0, wc.lpszClassName, wc.lpszClassName, 0,
-                                          0, 0, 0, 0, None, None, wc.hInstance, None)
-        return hwnd, wc
+            hwnd = user32.CreateWindowExW(0, _RECV_CLASS, _RECV_CLASS, 0,
+                                          0, 0, 0, 0, None, None, hinst, None)
+        if hwnd:
+            _BY_HWND[hwnd] = self
+        return hwnd
 
     def _wndproc(self, hwnd, msg, wparam, lparam):
         if msg == WM_COPYDATA:
@@ -410,6 +447,7 @@ class AimpIPC(threading.Thread):
         if self._aimp and self._recv:
             user32.SendMessageW(self._aimp, WM_AIMP_COMMAND, CMD_UNREGISTER_NOTIFY, LPARAM(self._recv))
         if self._recv:
+            _BY_HWND.pop(self._recv, None)
             user32.DestroyWindow(self._recv)
             self._recv = None
         if self._buf:
@@ -436,20 +474,33 @@ class AimpIPC(threading.Thread):
             user32.PostMessageW(self._recv, 0x0012, 0, 0)  # WM_QUIT → 泵退出 → run() 重连
 
     def run(self):
+        # 监护循环：任何一轮的意外异常（含 ctypes 原生层 OSError）都不允许弄死
+        # 线程——线程一死 AIMP 连接就永久失效，壁纸再也不更新（只能重启程序）。
         while not self._stop_evt.is_set():
-            if self._connect():
-                msg = wintypes.MSG()
-                while not self._stop_evt.is_set():
-                    r = user32.GetMessageW(byref(msg), None, 0, 0)
-                    if r <= 0:
-                        break
-                    user32.TranslateMessage(byref(msg))
-                    user32.DispatchMessageW(byref(msg))
-                self._drop_connection()
-                if not self._stop_evt.is_set():
-                    self._stop_evt.wait(2.0)  # 探活失败刚退泵：AIMP 可能还在忙，别热循环重连
-            else:
-                with self._lock:
-                    self._snap["connected"] = False
-                    self._snap["state"] = STATE_NO_AIMP
-                self._stop_evt.wait(5.0)
+            try:
+                self._run_once()
+            except Exception:
+                applog.log_exc("IPC 循环异常，重置连接:\n", *sys.exc_info())
+                try:
+                    self._drop_connection()
+                except Exception:
+                    pass
+                self._stop_evt.wait(2.0)
+
+    def _run_once(self):
+        if self._connect():
+            msg = wintypes.MSG()
+            while not self._stop_evt.is_set():
+                r = user32.GetMessageW(byref(msg), None, 0, 0)
+                if r <= 0:
+                    break
+                user32.TranslateMessage(byref(msg))
+                user32.DispatchMessageW(byref(msg))
+            self._drop_connection()
+            if not self._stop_evt.is_set():
+                self._stop_evt.wait(2.0)  # 探活失败刚退泵：AIMP 可能还在忙，别热循环重连
+        else:
+            with self._lock:
+                self._snap["connected"] = False
+                self._snap["state"] = STATE_NO_AIMP
+            self._stop_evt.wait(5.0)
