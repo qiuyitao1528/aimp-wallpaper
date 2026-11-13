@@ -176,7 +176,8 @@ class VisPanel:
         """
         pos, _ = self._anchor_pos()
         wa_l, wa_t, wa_r, wa_b = desktop.work_area()
-        gap = max(0, int(self.cfg.get("vis_anchor_gap", 10) or 10)) * int(self.s)
+        _gap = self.cfg.get("vis_anchor_gap")
+        gap = max(0, int(10 if _gap is None else _gap)) * int(self.s)  # 0 是合法值，不能被 or 吞掉
         if pos:
             x, y = pos[0], pos[1] + gap  # 锚点(文字块底部)与面板的间距，可调
         else:
@@ -196,12 +197,23 @@ class VisPanel:
         self._want = (x, y)
 
     def _follow_anchor(self):
-        """自动模式下每秒检查锚点变化（切歌/改字号时跟随）；手动定位后不跟。"""
+        """自动模式下每秒检查锚点变化（切歌/改字号时跟随）；手动定位后不跟。
+
+        锚点消失（关文字总开关删了 vis_anchor.json）时回退到兜底位——
+        此前面板会停在旧锚点位置不动。
+        """
         if self.cfg.get("vis_pos"):
             return
         pos, mtime = self._anchor_pos()
+        moved = False
         if pos and mtime != getattr(self, "_anchor_mtime", 0):
             self._anchor_mtime = mtime
+            moved = True
+        elif pos is None and self._anchor_cache is not None:
+            self._anchor_cache = None  # 锚点已消失：回兜底位
+            self._anchor_mtime = 0
+            moved = True
+        if moved:
             x, y = self._auto_pos()
             if (x, y) != self._want:
                 self._want = (x, y)
@@ -246,10 +258,12 @@ class VisPanel:
         self.cfg["vis_hidden"] = True
         config.save(self.cfg)
         self.win.withdraw()
+        self.spec.pause()  # 挂起采集：活动音频流会阻止显示器睡眠（Lively #2751 同款问题）
 
     def show(self):
         self.cfg["vis_hidden"] = False
         config.save(self.cfg)
+        self.spec.resume()
         self.win.deiconify()
         self._seat_above_desktop()
 

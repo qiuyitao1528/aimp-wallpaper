@@ -27,6 +27,7 @@ class Spectrum(threading.Thread):
         self._lock = threading.Lock()
         self._bars = np.zeros(self._n)
         self._stop = threading.Event()
+        self._paused = threading.Event()  # 面板隐藏时挂起采集（活动音频流阻止显示器睡眠）
         self.err: str | None = None
         self._buf = np.zeros(0, dtype=np.float32)
         self._win = np.hanning(N_FFT).astype(np.float32)  # 只算一次
@@ -36,6 +37,14 @@ class Spectrum(threading.Thread):
         self._prev_bars = np.zeros(self._n)  # 上一代目标（供 UI 时间插值）
         self._t_prev = 0.0
         self._t_curr = 0.0
+
+    def pause(self):
+        """挂起采集：关闭流，让系统可以正常睡眠/省电。"""
+        self._paused.set()
+
+    def resume(self):
+        """恢复采集（下次循环重建流，自动跟随当前默认设备）。"""
+        self._paused.clear()
 
     def snapshot(self) -> np.ndarray:
         with self._lock:
@@ -80,13 +89,17 @@ class Spectrum(threading.Thread):
         return (None, pyaudio.paContinue)
 
     def run(self):
-        """采集主循环：流失效（默认输出设备切换/拔设备）后自动重建跟随新设备。
+        """采集主循环：流失效（默认输出设备切换/拔设备）后自动重建跟随新设备；
+        面板隐藏时挂起（关闭流让系统正常睡眠），恢复后重建流。
 
         此前流一失效线程就静默退出，频谱从此冻结；错误路径也没有 terminate，
         泄漏 WASAPI/COM 资源。两条都在这一版修掉。
         """
         import pyaudiowpatch as pyaudio
         while not self._stop.is_set():
+            if self._paused.is_set():
+                self._stop.wait(0.5)  # 挂起态：不开设备
+                continue
             p = None
             stream = None
             try:
@@ -104,7 +117,7 @@ class Spectrum(threading.Thread):
                                 stream_callback=self._callback)
                 stream.start_stream()
                 self.err = None
-                while not self._stop.is_set() and stream.is_active():
+                while not self._stop.is_set() and not self._paused.is_set() and stream.is_active():
                     self._stop.wait(0.2)
                 # is_active 变 False：设备切换/失效 → 重建流跟随新设备
             except Exception as e:
@@ -124,5 +137,5 @@ class Spectrum(threading.Thread):
                         p.terminate()  # 此前错误路径不 terminate，泄漏 COM 资源
                 except Exception:
                     pass
-            if not self._stop.is_set():
+            if not self._stop.is_set() and not self._paused.is_set():
                 self._stop.wait(2.0)  # 设备恢复/切换后自动跟随

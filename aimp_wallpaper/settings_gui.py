@@ -179,6 +179,12 @@ class SettingsWindow:
         except Exception:
             pass
 
+        def _on_close():
+            type(self)._active = None  # 单例守卫清死引用
+            self.win.destroy()
+
+        self.win.protocol("WM_DELETE_WINDOW", _on_close)
+
     # ---------- 控件小工具 ----------
 
     def _two_col(self, pg):
@@ -269,8 +275,9 @@ class SettingsWindow:
     # ---------- 壁纸页（背景 / 过渡 / 日夜 / 暂停） ----------
 
     def _add_pct_invert(self, page, label, key, choices, keep):
-        """darken 特例：GUI 显示「压暗百分比」，配置存保留亮度 darken = 1 - pct/100。"""
-        pct = round((1.0 - float(keep or 0.75)) * 100)
+        """darken 特例：GUI 显示「压暗百分比」，配置存保留亮度 darken = 1 - pct/100。
+        keep=0（压暗 100%）是合法值，不能用 or 兜底——此前会被吞成默认 25%。"""
+        pct = round((1.0 - float(keep if keep is not None else 0.75)) * 100)
         return self._add_combo(page, label, choices, pct)
 
     def _tab_wallpaper(self):

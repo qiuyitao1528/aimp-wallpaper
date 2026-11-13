@@ -69,9 +69,11 @@ def c01():
 def c02():
     node = func_ast("aimp_wallpaper/__main__.py", "_watch_panel")
     dump = ast.dump(node)
-    assert "'built'" in dump, "未按建面板时尺寸对比（托盘开关会被误重建）"
-    assert "deiconify" in dump, "缺重现不重建路径"
-    assert "withdraw" in dump
+    assert "shutdown" in dump and "deiconify" in dump and "withdraw" in dump, \
+        "重建/重现/收起三条路径缺一不可（托盘开关走 deiconify 不重建）"
+    src = open("aimp_wallpaper/__main__.py", encoding="utf-8").read()
+    seg = src.split("def _watch_panel", 1)[1].split("root.after(1000, _watch_panel)", 1)[0]
+    assert "prev[0]" in seg and "prev[1]" in seg, "尺寸变化应与上轮签名对比"
 
 
 # ---- 3 歌词缓存键含语言偏好（此前简/繁切换对已抓过的歌永远无效） ----
@@ -374,7 +376,7 @@ def c16():
 def c17():
     d = os.path.join(TMP, "c17")
     os.makedirs(d, exist_ok=True)
-    key = hashlib.md5("t17|a17|zh-Hans".encode()).hexdigest()
+    key = hashlib.md5("t17|a17||zh-Hans".encode()).hexdigest()  # 与 fetch_lrc 新键（含文件名段）一致
     cache_file = os.path.join(d, key + ".lrc")
     open(cache_file, "w", encoding="utf-8").write("[00:59.000]cached line")
     m1 = os.path.getmtime(cache_file)
@@ -482,8 +484,305 @@ def c29():
     assert out.endswith("…")
 
 
-# ---- 30 配置往返（回归护栏） ----
+# ---- 30 IPC 持锁不再发消息往返（此前 AIMP 挂死时锁被无限持有 → 全局死锁） ----
 def c30():
+    node = func_ast("aimp_wallpaper/aimp_api.py", "_on_timer")
+    withs = [n for n in ast.walk(node) if isinstance(n, ast.With)]
+    assert withs, "_on_timer 应有锁段"
+    for w in withs:
+        assert "_prop" not in ast.dump(w), "持锁状态下不得发 SendMessage 往返"
+
+
+# ---- 31 IPC 所有消息带超时（此前同步 SendMessageW，AIMP 挂死=线程永久停摆） ----
+def c31():
+    import re
+    src = open("aimp_wallpaper/aimp_api.py", encoding="utf-8").read()
+    bare = re.findall(r"SendMessageW\(", src.replace("SendMessageTimeoutW(", ""))
+    assert not bare, f"仍有 {len(bare)} 处无超时的裸 SendMessageW"
+
+
+# ---- 32 异常封面不再让渲染死循环失败（DecompressionBomb 等全部兜住） ----
+def c32():
+    node = func_ast("aimp_wallpaper/wallpaper.py", "_open_cover")
+    trys = [n for n in ast.walk(node) if isinstance(n, ast.Try)]
+    assert trys and any(h.type is None or "Exception" in ast.dump(h)
+                        for t in trys for h in t.handlers), "应宽捕 Exception"
+    from PIL import Image
+    orig = Image.open
+
+    def boom(*a, **k):
+        raise Image.DecompressionBombError("huge")
+
+    Image.open = boom
+    try:
+        assert wallpaper._open_cover(b"\x89PNG fake") is None, "异常封面应回退占位而非抛出"
+    finally:
+        Image.open = orig
+
+
+# ---- 33 用户的 Windows 幻灯片放映设置被捕获并在退出时还原（此前永久覆盖） ----
+def c33():
+    class FakeDW:
+        def __init__(self):
+            self.ss = None
+            self.opts = None
+
+        def GetMonitorDevicePathAt(self, i):
+            return "MONO"
+
+        def GetWallpaper(self, mid):
+            return os.path.join(TMP, "c33_orig.jpg")
+
+        def GetPosition(self):
+            return 4
+
+        def GetSlideshow(self):
+            return 0xDEAD
+
+        def GetSlideshowOptions(self):
+            return (0, 86400)
+
+        def SetWallpaper(self, mid, path):
+            return None
+
+        def SetPosition(self, p):
+            return None
+
+        def SetSlideshow(self, ptr):
+            # 兼容 int 与 c_void_p 两种传入（int(c_void_p) 会抛 TypeError）
+            self.ss = (ptr.value if isinstance(ptr, ctypes.c_void_p) else int(ptr)) if ptr else None
+
+        def SetSlideshowOptions(self, o, tick):
+            self.opts = (int(o), int(tick))
+
+    origjpg = os.path.join(TMP, "c33_orig.jpg")
+    open(origjpg, "w").write("x")
+    dw = FakeDW()
+    orig_com = wallpaper._get_wallpaper_com
+    orig_rel = wallpaper._com_release
+    wallpaper._get_wallpaper_com = lambda: dw
+    wallpaper._com_release = lambda ptr: None  # 0xDEAD 是假指针，真 release 会崩进程
+    try:
+        cfg = dict(config.DEFAULTS)
+        cfg["output_dir"] = os.path.join(TMP, "c33")
+        os.makedirs(cfg["output_dir"], exist_ok=True)
+        wallpaper.capture_original(cfg)
+        assert wallpaper._ORIG_SLIDESHOW == 0xDEAD, "幻灯片指针应被捕获"
+        assert wallpaper._ORIG_SLIDESHOW_OPTS == (0, 86400), "幻灯片选项应被捕获"
+        msg = wallpaper.restore_original(cfg)
+        assert "已恢复" in msg
+        assert dw.ss == 0xDEAD, "退出恢复应把幻灯片设回去"
+        assert dw.opts == (0, 86400), "幻灯片选项应还原"
+        assert wallpaper._ORIG_SLIDESHOW is None, "COM 指针用后应释放"
+    finally:
+        wallpaper._get_wallpaper_com = orig_com
+        wallpaper._com_release = orig_rel
+
+
+# ---- 34 面板与文字区间距=0 生效（此前 `or 10` 把 0 吞成 10） ----
+def c34():
+    import aimp_wallpaper.vis_panel as vp
+
+    class FP:
+        cfg = {"vis_anchor_gap": 0, "vis_pos": None}
+        s = 1.0
+        W = 420
+        H = 120
+        _anchor_cache = None
+        _anchor_mtime = None
+
+        @staticmethod
+        def _anchor_pos():
+            return ((100, 100), 1)
+
+    x, y = vp.VisPanel._auto_pos(FP())
+    assert (x, y) == (100, 100), f"间距 0 应紧贴锚点，实际 {(x, y)}"
+
+
+# ---- 35 darken=0（压暗100%）不再被 or 吞成默认（GUI 显示与保存口径） ----
+def c35():
+    src = open("aimp_wallpaper/settings_gui.py", encoding="utf-8").read()
+    assert "keep if keep is not None" in src, "darken 0 值应显式判 None"
+
+
+# ---- 36 duration=0 跟随共享内存（此前保留旧值，电台流歌词错位） ----
+def c36():
+    from aimp_wallpaper.aimp_api import AimpIPC
+    ipc = AimpIPC()
+    ipc._snap["duration_ms"] = 180000
+    ipc._read_fileinfo = lambda: {"title": "X", "artist": "Y", "album": "", "filename": "a.mp3",
+                                  "bit_rate": 0, "channels": 2, "duration_ms": 0,
+                                  "file_size": 0, "samplerate": 0}
+    ipc._request_cover = lambda: None
+    ipc._on_track(force=True)
+    assert ipc.snapshot()["duration_ms"] == 0, "时长 0 应写快照（电台/流）"
+
+
+# ---- 37 缓存键含文件名（此前无题/同名歌共用错误歌词） ----
+def c37():
+    d = os.path.join(TMP, "c37")
+    os.makedirs(d, exist_ok=True)
+    a1 = os.path.join(d, "one.mp3")
+    a2 = os.path.join(d, "two.mp3")
+    for p in (a1, a2):
+        open(p, "w").write("x")
+    open(os.path.join(d, "one.lrc"), "w", encoding="utf-8").write("[01:00.00]AAA")
+    open(os.path.join(d, "two.lrc"), "w", encoding="utf-8").write("[01:00.00]BBB")
+    r1 = ly.fetch_lrc("同曲", "歌手", 60000, d, a1, "zh-Hans")
+    r2 = ly.fetch_lrc("同曲", "歌手", 60000, d, a2, "zh-Hans")
+    assert r1 and r1[0][1] == "AAA" and r2 and r2[0][1] == "BBB", \
+        f"不同文件的同名歌不应共用缓存：{r1} / {r2}"
+
+
+# ---- 38 锚点消失后面板回退兜底位（此前停在旧锚点不动） ----
+def c38():
+    import aimp_wallpaper.vis_panel as vp
+
+    class FP:
+        cfg = {"vis_anchor_gap": 10, "vis_pos": None}
+        s = 1.0
+        W = 420
+        H = 120
+        _anchor_mtime = 5
+        _want = (210, 215)
+
+        def __init__(self):
+            self._anchor_cache = (200, 200)
+            self.win = type("W", (), {"geometry": staticmethod(lambda g: setattr(self, "geo", g))})()
+            self.geo = None
+
+        @staticmethod
+        def _anchor_pos():
+            return None, 0
+
+        def _auto_pos(self):
+            return (1800, 900)  # 兜底位（右下）
+
+    fp = FP()
+    vp.VisPanel._follow_anchor(fp)
+    assert fp._anchor_cache is None, "陈旧锚点缓存应清空"
+    assert fp._want == (1800, 900) and fp.geo is not None, "应挪回兜底位"
+
+
+# ---- 39 锚点消失后歌词窗回退兜底位（同款） ----
+def c39():
+    class FL:
+        cfg = {"lyrics_pos": None, "lyrics_follow": "anchor"}
+        s = 1.0
+        W = 420
+        H = 90
+        surface = None
+        _want_mtime = 7
+        _want = (100, 100)
+
+        def __init__(self):
+            self.win = type("W", (), {"geometry": staticmethod(lambda g: setattr(self, "geo", g))})()
+            self.geo = None
+
+        @staticmethod
+        def _anchor_pos():
+            return None, 0
+
+        def _auto_pos(self):
+            return (10, 10)  # 兜底位
+
+    fl = FL()
+    ly.LyricsWindow._follow_anchor(fl)
+    assert fl._want == (10, 10) and fl.geo is not None, "歌词窗应挪回兜底位"
+
+
+# ---- 40 targets 为空时不误删 vis_anchor.json（显示器过滤配置错的兜底） ----
+def c40():
+    d = os.path.join(TMP, "c40")
+    os.makedirs(d, exist_ok=True)
+    stale = os.path.join(d, "vis_anchor.json")
+    json.dump({"x": 1, "y": 2}, open(stale, "w"))
+
+    class FakeDW:
+        def SetWallpaper(self, mid, path):
+            return None
+
+        def GetPosition(self):
+            return 4
+
+    orig = wallpaper._get_wallpaper_com
+    wallpaper._get_wallpaper_com = lambda: FakeDW()
+    try:
+        cfg = dict(config.DEFAULTS)
+        cfg.update({"output_dir": d, "fade_native": False, "show_text": False,
+                    "monitors": "NO-SUCH-DEVICE"})
+        monitors = [{"id": "MONO", "w": 640, "h": 480, "left": 0, "top": 0}]
+        wallpaper.render_and_apply(None, {"title": "t", "artist": "a", "album": ""},
+                                   cfg, monitors)
+        assert os.path.exists(stale), "无可用屏时不应误删锚点"
+    finally:
+        wallpaper._get_wallpaper_com = orig
+
+
+# ---- 41 vis_fmax 不再是幽灵键（此前不在 DEFAULTS，永不持久化） ----
+def c41():
+    assert "vis_fmax" in config.DEFAULTS, "vis_fmax 应进 DEFAULTS"
+
+
+# ---- 42 面板监视器签名含屏幕尺寸（分辨率/DPI 变化后重建） ----
+def c42():
+    node = func_ast("aimp_wallpaper/__main__.py", "_watch_panel")
+    assert "winfo_screenwidth" in ast.dump(node) and "winfo_screenheight" in ast.dump(node), \
+        "监视器签名应含屏幕尺寸"
+
+
+# ---- 43 壁纸逐屏容错（此前一块屏 COM 失败，其它屏也不应用） ----
+def c43():
+    class FakeDW:
+        def __init__(self):
+            self.setted = []
+
+        def SetWallpaper(self, mid, path):
+            if mid == "MONO2":
+                raise OSError("com boom")
+            self.setted.append(mid)
+
+        def GetPosition(self):
+            return 4
+
+    dw = FakeDW()
+    orig = wallpaper._get_wallpaper_com
+    wallpaper._get_wallpaper_com = lambda: dw
+    try:
+        cfg = dict(config.DEFAULTS)
+        cfg.update({"output_dir": os.path.join(TMP, "c43"), "fade_native": False})
+        os.makedirs(cfg["output_dir"], exist_ok=True)
+        monitors = [{"id": "MONO1", "w": 640, "h": 480, "left": 0, "top": 0},
+                    {"id": "MONO2", "w": 800, "h": 600, "left": 640, "top": 0}]
+        paths = wallpaper.render_and_apply(None, {"title": "t", "artist": "a", "album": ""},
+                                           cfg, monitors)
+        assert len(paths) == 2 and dw.setted == ["MONO1"], "第二屏失败不应拖垮第一屏"
+    finally:
+        wallpaper._get_wallpaper_com = orig
+
+
+# ---- 44 退出时停止歌词抓取线程（此前靠 daemon 强杀） ----
+def c44():
+    node = func_ast("aimp_wallpaper/__main__.py", "_quit_app")
+    dump = ast.dump(node)
+    assert "fetcher" in dump and "stop" in dump, "_quit_app 应停止歌词抓取线程"
+
+
+# ---- 45 volume 死轮询已删（每 120ms 一次的无效消息往返） ----
+def c45():
+    src = open("aimp_wallpaper/aimp_api.py", encoding="utf-8").read()
+    assert "volume" not in src.lower(), "volume 轮询应删除（无任何消费者）"
+
+
+# ---- 46 设置窗口单例死引用清理 ----
+def c46():
+    node = func_ast("aimp_wallpaper/settings_gui.py", "_on_close")
+    assert node is not None, "设置窗应注册 _on_close 清理单例守卫"
+    assert "_active" in ast.dump(node), "_on_close 应清 _active"
+
+
+# ---- 30(旧) 配置往返（回归护栏） ----
+def c30_cfg():
     p = os.path.join(TMP, "c30.json")
     config.CONFIG_PATH = p
     cfg = dict(config.DEFAULTS)
@@ -508,7 +807,7 @@ for n, title, fn in [
     (10, "频谱流失效自动重建", c09_10),
     (11, "频谱错误路径 PyAudio 必 terminate", c09_10),
     (12, "OverlaySurface 释放不漏 GDI 对象", c11),
-    (13, "line_limit 硬上限真生效（长词不出屏）", c12),
+    (13, "_wrap_title 死参数已删+折行不超宽", c12),
     (14, "歌词/面板锁定菜单随设置同步", c13),
     (15, "ID3v2.2 ULT 歌词可读", c14),
     (16, "FLAC 全部 COMMENT 块扫描+简繁择优", c15),
@@ -524,7 +823,24 @@ for n, title, fn in [
     (26, "旧配置 sub_* 迁移", c27),
     (27, "非法颜色回退", c28),
     (28, "省略号宽度收敛", c29),
-    (29, "配置保存/加载往返", c30),
+    (29, "配置保存/加载往返", c30_cfg),
+    (30, "IPC 持锁不再发消息往返（死锁）", c30),
+    (31, "IPC 所有消息带超时", c31),
+    (32, "异常封面宽捕（DecompressionBomb）", c32),
+    (33, "Windows 幻灯片设置捕获+还原", c33),
+    (34, "面板与文字区间距=0 生效", c34),
+    (35, "darken=0 不被 or 吞掉", c35),
+    (36, "duration=0 跟随共享内存", c36),
+    (37, "歌词缓存键含文件名", c37),
+    (38, "锚点消失面板回退兜底位", c38),
+    (39, "锚点消失歌词回退兜底位", c39),
+    (40, "无可用屏不误删锚点", c40),
+    (41, "vis_fmax 进 DEFAULTS", c41),
+    (42, "监视器签名含屏幕尺寸", c42),
+    (43, "壁纸逐屏容错", c43),
+    (44, "退出停歌词抓取线程", c44),
+    (45, "volume 死轮询删除", c45),
+    (46, "设置窗单例死引用清理", c46),
 ]:
     check(n, title, fn)
 

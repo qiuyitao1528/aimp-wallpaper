@@ -271,7 +271,8 @@ def main():
             w = int(cfg.get("vis_width", 420) or 420)
             h = int(cfg.get("vis_height", 120) or 120)
             hidden = bool(cfg.get("vis_hidden"))
-            sig = (w, h, hidden)
+            # 屏幕尺寸进签名：分辨率/显示器布局变化后重建面板（此前面板尺寸停在启动时）
+            sig = (w, h, hidden, root.winfo_screenwidth(), root.winfo_screenheight())
             prev = _panel_state["sig"]
             if sig != prev:
                 _panel_state["sig"] = sig
@@ -282,8 +283,8 @@ def main():
                             p.win.withdraw()  # 不走 hide()：不回写 cfg
                     elif p is None:
                         show_vis()
-                    elif (w, h) != _panel_state["built"]:
-                        p.shutdown()  # 尺寸变了：停采集+销毁，整体重建
+                    elif (w, h, sig[3], sig[4]) != (prev[0], prev[1], prev[3], prev[4]):
+                        p.shutdown()  # 尺寸/屏幕变了：停采集+销毁，整体重建
                         panel["obj"] = None
                         show_vis()
                     else:
@@ -294,7 +295,8 @@ def main():
         root.after(1000, _watch_panel)  # 无条件重排：任何分支都不能断链
 
     _panel_state["sig"] = (int(cfg.get("vis_width", 420) or 420),
-                           int(cfg.get("vis_height", 120) or 120), bool(cfg.get("vis_hidden")))
+                           int(cfg.get("vis_height", 120) or 120), bool(cfg.get("vis_hidden")),
+                           root.winfo_screenwidth(), root.winfo_screenheight())
     root.after(1000, _watch_panel)
 
     def toggle_lyrics():
@@ -340,6 +342,11 @@ def main():
                     done.set()
             threading.Thread(target=_restore, daemon=True, name="restore").start()
             done.wait(3.0)  # 恢复卡死也照样退，不留僵尸进程和僵尸图标
+        try:
+            if lyrics.get("fetcher") is not None:
+                lyrics["fetcher"].stop()  # 此前不停抓取线程，靠 daemon 强杀
+        except Exception:
+            pass
         try:
             tray.stop()
         except Exception:

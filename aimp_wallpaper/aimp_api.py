@@ -91,11 +91,22 @@ WM_DESTROY = 0x0002
 
 STATE_NO_AIMP, STATE_STOPPED, STATE_PAUSED, STATE_PLAYING = -1, 0, 1, 2
 
-P_VERSION, P_POSITION, P_DURATION, P_STATE, P_VOLUME, P_MUTE = 0x10, 0x20, 0x30, 0x40, 0x50, 0x60
+P_VERSION, P_POSITION, P_DURATION, P_STATE = 0x10, 0x20, 0x30, 0x40
 CMD_REGISTER_NOTIFY, CMD_UNREGISTER_NOTIFY = 11, 12
 CMD_PLAY, CMD_PLAYPAUSE, CMD_PAUSE, CMD_STOP, CMD_NEXT, CMD_PREV = 13, 14, 15, 16, 17, 18
 CMD_GET_ALBUMART = 29
 ALBUMART_MAGIC = 0x41495043  # "AIPC"
+
+_SMTO_ABORTIFHUNG = 2
+
+
+def _send_timeout(hwnd, msg, wparam, lparam, timeout_ms=1000) -> int:
+    """带超时的 SendMessage：AIMP 挂死/模态卡住时，IPC 线程绝不能卡死在内核
+    调用里（同步 SendMessageW 无超时，一旦目标不回消息线程就永久停摆）。"""
+    dummy = c_size_t()
+    r = user32.SendMessageTimeoutW(hwnd, msg, WPARAM(wparam), LPARAM(lparam),
+                                   _SMTO_ABORTIFHUNG, timeout_ms, byref(dummy))
+    return int(r)
 
 AIMP_CLASS = "AIMP2_RemoteInfo"
 SHARED_SIZE = 2048
@@ -196,7 +207,7 @@ class AimpIPC(threading.Thread):
         self._gen = 0                          # 曲目代数：切歌 +1
         self._snap = {
             "connected": False, "state": STATE_NO_AIMP,
-            "position_ms": 0, "duration_ms": 0, "volume": 0,
+            "position_ms": 0, "duration_ms": 0,
             "file_size": 0, "samplerate": 0, "bit_rate": 0, "channels": 0,
             "title": "", "artist": "", "album": "", "filename": "",
             "cover_gen": 0,
@@ -256,7 +267,7 @@ class AimpIPC(threading.Thread):
 
     def set_position(self, ms: int):
         if self._aimp:
-            user32.SendMessageW(self._aimp, WM_AIMP_PROPERTY, P_POSITION | 1, LPARAM(max(0, int(ms))))
+            _send_timeout(self._aimp, WM_AIMP_PROPERTY, P_POSITION | 1, max(0, int(ms)))
 
     def shutdown(self):
         self._stop_evt.set()
@@ -267,10 +278,10 @@ class AimpIPC(threading.Thread):
 
     def _cmd(self, n):
         if self._aimp:
-            user32.SendMessageW(self._aimp, WM_AIMP_COMMAND, n, 0)
+            _send_timeout(self._aimp, WM_AIMP_COMMAND, n, 0)
 
     def _prop(self, pid) -> int:
-        return int(user32.SendMessageW(self._aimp, WM_AIMP_PROPERTY, pid | 0, 0) & 0xFFFFFFFF)
+        return int(_send_timeout(self._aimp, WM_AIMP_PROPERTY, pid | 0, 0) & 0xFFFFFFFF)
 
     def _request_cover(self):
         """换代后启动封面获取：延迟 300ms 首次请求（AIMP 常已就绪），2s 内每 500ms 快速重试，
@@ -292,7 +303,7 @@ class AimpIPC(threading.Thread):
             return
         self._cover_next_try = now + (0.06 if now < getattr(self, "_cover_fast_until", 0) else 0.5)
         # r==0 可能只是切歌瞬间还没解析好，不立即放弃，按窗口继续重试
-        user32.SendMessageW(self._aimp, WM_AIMP_COMMAND, CMD_GET_ALBUMART, LPARAM(self._recv or 0))
+        _send_timeout(self._aimp, WM_AIMP_COMMAND, CMD_GET_ALBUMART, self._recv or 0)
 
     def _on_track(self, force=False):
         """读元数据；签名去抖后若确实换曲 → 换代 + 请求封面 + 发事件。
@@ -324,10 +335,11 @@ class AimpIPC(threading.Thread):
                 "bit_rate": info.get("bit_rate") or 0,
                 "channels": info.get("channels") or 0,
             })
-            if info.get("duration_ms"):
-                self._snap["duration_ms"] = info["duration_ms"]
             self._gen += 1
             self._snap["cover_gen"] = self._gen
+            # 时长总是跟随共享内存：此前 0 时保留旧值，切到电台/流媒体时
+            # 歌词与歌曲信息行会用上一首歌的时长错位
+            self._snap["duration_ms"] = int(info.get("duration_ms") or 0)
         self._request_cover()
         self._track_evt.set()
 
@@ -356,16 +368,16 @@ class AimpIPC(threading.Thread):
         if not self._recv:  # 接收窗建不起来：注册通知/轮询都没了，绝不能假装已连接
             kernel32.UnmapViewOfFile(self._buf)
             self._buf = None
+            kernel32.CloseHandle(self._mapping)
             self._mapping = None
             self._aimp = None
             return False
-        user32.SendMessageW(hwnd, WM_AIMP_COMMAND, CMD_REGISTER_NOTIFY, LPARAM(self._recv))
+        _send_timeout(hwnd, WM_AIMP_COMMAND, CMD_REGISTER_NOTIFY, self._recv)
         self._timer_id = user32.SetTimer(self._recv, 1, self._poll_ms, None)
         with self._lock:
             self._snap["connected"] = True
             self._snap["state"] = self._prop(P_STATE)
             self._snap["duration_ms"] = self._prop(P_DURATION)
-            self._snap["volume"] = self._prop(P_VOLUME)
         return True
 
     def _make_receiver(self):
@@ -413,15 +425,13 @@ class AimpIPC(threading.Thread):
     def _on_timer(self):
         if not self._aimp:
             return
-        # AIMP 进程是否还活着：SendMessage 0 会立即失败返回 0
-        user32.SendMessageTimeoutW.restype = c_size_t
-        dummy = c_size_t()
-        SMTO_ABORTIFHUNG = 2
-        r = user32.SendMessageTimeoutW(self._aimp, 0x0000, 0, 0,
-                                       SMTO_ABORTIFHUNG, 300, byref(dummy))
+        # AIMP 进程是否还活着：WM_NULL 超时即失联（沿用既有判定语义）
+        r = _send_timeout(self._aimp, 0x0000, 0, 0, 300)
         if not r:
             self._lose_aimp()  # AIMP 忙碌超 300ms ≠ 永久掉线：退泵重连
             return
+        # 属性读取全部在锁外：此前有轮询在持锁状态下发 SendMessage，
+        # AIMP 挂死时锁被无限持有，snapshot() 的所有消费线程跟着死锁
         state = self._prop(P_STATE)
         pos = self._prop(P_POSITION)
         dur = self._prop(P_DURATION)
@@ -429,7 +439,6 @@ class AimpIPC(threading.Thread):
             self._snap["state"] = state
             self._snap["position_ms"] = pos
             self._snap["duration_ms"] = dur
-            self._snap["volume"] = self._prop(P_VOLUME)
         self._on_track()
         # 封面重试窗口：还没拿到（evt 未置位）就按节拍重试，超窗放弃
         if self._cover_retry_until:
@@ -445,7 +454,7 @@ class AimpIPC(threading.Thread):
 
     def _drop_connection(self):
         if self._aimp and self._recv:
-            user32.SendMessageW(self._aimp, WM_AIMP_COMMAND, CMD_UNREGISTER_NOTIFY, LPARAM(self._recv))
+            _send_timeout(self._aimp, WM_AIMP_COMMAND, CMD_UNREGISTER_NOTIFY, self._recv)
         if self._recv:
             _BY_HWND.pop(self._recv, None)
             user32.DestroyWindow(self._recv)
@@ -453,7 +462,9 @@ class AimpIPC(threading.Thread):
         if self._buf:
             kernel32.UnmapViewOfFile(self._buf)
             self._buf = None
-        self._mapping = None
+        if self._mapping:
+            kernel32.CloseHandle(self._mapping)  # 此前只 Unmap 不 Close：重连一次漏一个内核句柄
+            self._mapping = None
         self._aimp = None
         with self._lock:
             self._snap["connected"] = False

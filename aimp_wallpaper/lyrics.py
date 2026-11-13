@@ -275,9 +275,10 @@ def fetch_lrc(title: str, artist: str, duration_ms: int | None,
     返回 [(ms, 原文, 翻译)]（翻译可为空串）。
     """
     os.makedirs(cache_dir, exist_ok=True)
-    # 缓存键必须含语言偏好：简/繁优先是不同的择优结果，共用一份缓存会让
-    # 「多语言优先」设置对已抓过的歌永远不生效
-    key = hashlib.md5(f"{title.lower()}|{artist.lower()}|{lang_pref}".encode("utf-8")).hexdigest()
+    # 缓存键必须含语言偏好（简/繁是不同择优结果）与文件名（无标题/同名曲目
+    # 此前共用一份缓存，歌词串台）；title/artist 去(strip)空白防标签尾空格分叉
+    key = hashlib.md5(f"{(title or '').strip().lower()}|{(artist or '').strip().lower()}"
+                      f"|{os.path.basename(audio_path or '')}|{lang_pref}".encode("utf-8")).hexdigest()
     cache_file = os.path.join(cache_dir, key + ".lrc")
 
     lrc_text = None
@@ -485,7 +486,11 @@ class LyricsWindow:
         return (int(r.left), int(r.top))
 
     def _follow_anchor(self):
-        """与频谱面板一致：手动定位后不跟；锚点文件变化或面板移动时才挪窗。"""
+        """与频谱面板一致：手动定位后不跟；锚点文件变化或面板移动时才挪窗。
+
+        锚点消失（关文字总开关删了 vis_anchor.json）时回退到兜底位——
+        此前歌词窗会停在旧锚点位置不动。
+        """
         if self.cfg.get("lyrics_pos"):
             return
         mode = self.cfg.get("lyrics_follow", "panel")
@@ -496,6 +501,9 @@ class LyricsWindow:
             pos, mtime = self._anchor_pos()
             if pos and mtime != getattr(self, "_want_mtime", 0):
                 self._want_mtime = mtime
+                moved = True
+            elif pos is None and getattr(self, "_want_mtime", 0):
+                self._want_mtime = 0  # 锚点已消失：回兜底位
                 moved = True
         else:  # panel：面板可能被拖动，位置每帧都纠一次（代价极小）
             moved = True
@@ -675,6 +683,13 @@ class LyricsWindow:
             if time.monotonic() - getattr(self, "_last_maint", 0) >= 1.0:
                 self._last_maint = time.monotonic()
                 self._lock_var.set(bool(self.cfg.get("lyrics_locked")))  # 设置改动后同步右键菜单
+                # DPI/缩放调整：刷新比例因子并强制 _ensure_fonts 全量重建（含窗宽/字号）
+                dpi = (desktop.user32.GetDpiForSystem() or 96) / 96.0
+                if abs(dpi - self.s) > 1e-6:
+                    self.s = dpi
+                    self.pad = int(4 * self.s)
+                    self._font_key = None
+                    self._font_cache.clear()
             if self.cfg.get("lyrics_hidden"):
                 if self.win.winfo_viewable():
                     self.win.withdraw()  # 托盘/设置翻转 cfg 后这里自管理显隐

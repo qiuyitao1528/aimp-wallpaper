@@ -10,12 +10,13 @@ import io
 import json
 import os
 import re
+import sys
 import time
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
-from . import config
+from . import applog, config
 
 # ---- comtypes: IDesktopWallpaper（虚表顺序必须完整声明到所用槽位）----
 import comtypes
@@ -1020,8 +1021,8 @@ def _open_cover(cover_bytes: bytes | None) -> Image.Image | None:
                 im.thumbnail((_COVER_MAX_PX, _COVER_MAX_PX), Image.LANCZOS)
             if im.mode != 'RGB':
                 im = im.convert('RGB')  # 封面不需要 alpha，RGB 直接省 1/4
-        except OSError:
-            im = None
+        except Exception:  # OSError / PIL DecompressionBombError 等——此前只捕 OSError，
+            im = None      # 异常封面会让这首歌的渲染每一轮都失败（壁纸卡在上一首）
         if len(_COVER_CACHE) > 2:
             _COVER_CACHE.clear()
         if im is not None:
@@ -1085,7 +1086,11 @@ def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors:
                 pass
         _arm_native_fade(dw, olds)
     for m, path in zip(targets, paths):
-        dw.SetWallpaper(m["id"], path)
+        try:
+            dw.SetWallpaper(m["id"], path)
+        except Exception:
+            # 逐屏容错：此前一块屏的 COM 调用失败会抛出去，其它屏也不应用了
+            applog.log_exc(f"SetWallpaper 失败（屏 {m.get('id')}）:\n", *sys.exc_info())
     try:  # 已经是 FILL 就不再重复设置：SetPosition 会触发重新应用，打断淡入
         if dw.GetPosition() != DWPOS_FILL:
             dw.SetPosition(DWPOS_FILL)
@@ -1103,8 +1108,9 @@ def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors:
                 json.dump(data, f)
         except OSError:
             pass
-    elif not anchor:
-        # 无锚点（关文字总开关/窗口太窄）：删掉旧锚点，否则面板/歌词会钉在已消失的文字区位置
+    elif not anchor and targets:
+        # 无锚点（关文字总开关/窗口太窄）：删掉旧锚点，否则面板/歌词会钉在已消失的文字区位置。
+        # targets 为空（如显示器过滤配置错）时不算"真的无锚点"，不误删
         try:
             os.remove(os.path.join(out_dir, "vis_anchor.json"))
         except OSError:
@@ -1120,8 +1126,14 @@ def _filter_monitors(monitors: list[dict], which) -> list[dict]:
     return [m for m in monitors if any(w in m["id"] for w in which)]
 
 
+_ORIG_SLIDESHOW: int | None = None       # 用户原本的 Windows 幻灯片（COM 指针，进程内有效）
+_ORIG_SLIDESHOW_OPTS: tuple | None = None
+
+
 def capture_original(cfg: dict) -> None:
-    """首次运行记录原壁纸（只记一次）。"""
+    """首次运行记录原壁纸（只记一次）。含用户的幻灯片放映设置——
+    此前 SetSlideshow 会把它永久覆盖且退出不恢复（个性化被程序改掉）。"""
+    global _ORIG_SLIDESHOW, _ORIG_SLIDESHOW_OPTS
     if cfg.get("original_wallpaper"):
         return
     try:
@@ -1133,16 +1145,38 @@ def capture_original(cfg: dict) -> None:
         pos = dw.GetPosition()
         cfg["original_wallpaper"] = cur
         cfg["original_position"] = int(pos)
+        try:
+            ss = dw.GetSlideshow()
+            _ORIG_SLIDESHOW = int(ss) if ss else None
+            opts = dw.GetSlideshowOptions()
+            _ORIG_SLIDESHOW_OPTS = (int(opts[0]), int(opts[1]))
+        except Exception:
+            _ORIG_SLIDESHOW = None
+            _ORIG_SLIDESHOW_OPTS = None
         config.save(cfg)
     except Exception:
         pass
 
 
 def restore_original(cfg: dict) -> str:
+    global _ORIG_SLIDESHOW, _ORIG_SLIDESHOW_OPTS
     orig = cfg.get("original_wallpaper")
     if not orig or not os.path.exists(orig):
         return f"config 里没有可恢复的原壁纸记录（{orig!r}），请手动在 设置→个性化 里改回"
     dw = _get_wallpaper_com()
     dw.SetWallpaper(None, orig)
     dw.SetPosition(cfg.get("original_position") if cfg.get("original_position") is not None else DWPOS_FILL)
+    if _ORIG_SLIDESHOW:  # 把用户的幻灯片放映设置原样还回去
+        try:
+            dw.SetSlideshow(ctypes.c_void_p(_ORIG_SLIDESHOW))
+        except Exception:
+            pass
+        _com_release(ctypes.c_void_p(_ORIG_SLIDESHOW))
+        _ORIG_SLIDESHOW = None
+    if _ORIG_SLIDESHOW_OPTS:
+        try:
+            dw.SetSlideshowOptions(int(_ORIG_SLIDESHOW_OPTS[0]), int(_ORIG_SLIDESHOW_OPTS[1]))
+        except Exception:
+            pass
+        _ORIG_SLIDESHOW_OPTS = None
     return f"已恢复原壁纸：{orig}"
