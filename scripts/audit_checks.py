@@ -831,6 +831,73 @@ def c49():
     assert "SendMessageTimeoutW.argtypes" in src, "参数表应显式声明"
 
 
+# ---- 50 播放/暂停状态通知即时唤醒 worker（此前靠 0.5s 轮询，反馈慢半拍） ----
+def c50():
+    src = open("aimp_wallpaper/aimp_api.py", encoding="utf-8").read()
+    seg = src.split("if msg == WM_AIMP_NOTIFY", 1)[1].split("return 0", 1)[0]
+    assert "P_STATE" in seg, "属性通知应处理状态变化"
+    assert "_track_evt.set()" in seg, "状态翻转应即时唤醒 worker"
+    node = func_ast("aimp_wallpaper/aimp_api.py", "_wndproc")
+    withs = [n for n in ast.walk(node) if isinstance(n, ast.With)]
+    for w in withs:
+        assert "_prop" not in ast.dump(w), "通知分支持锁发消息=死锁（上轮同款）"
+
+
+# ---- 51 静止时跳过 position/duration 轮询（暂停/停止时进度静止） ----
+def c51():
+    node = func_ast("aimp_wallpaper/aimp_api.py", "_on_timer")
+    assert "STATE_PLAYING" in ast.dump(node), "静止时应跳过进度轮询"
+
+
+# ---- 52 背景缓存只留当前 1 张（4K 省 33MB、1080p 省 8MB，显示无差别） ----
+def c52():
+    src = open("aimp_wallpaper/wallpaper.py", encoding="utf-8").read()
+    assert "len(_COVER_CACHE) > 1" in src, "封面缓存应只留 1 张"
+    assert "len(_BG_CACHE) > 1" in src, "背景缓存应只留 1 张"
+
+
+# ---- 53 频谱静默帧跳过（无声音/暂停时不再 30fps 重绘全透明帧烧 CPU） ----
+def c53():
+    node = func_ast("aimp_wallpaper/vis_panel.py", "_frame_inner")
+    assert "_was_idle" in ast.dump(node), "应有静默帧跳过分支"
+
+
+# ---- 54 渲染确定性：相同输入出相同 PNG 字节（显示效果零变化护栏） ----
+def c54():
+    import hashlib as _h
+    d = os.path.join(TMP, "c54")
+    os.makedirs(d, exist_ok=True)
+
+    class FakeDW:
+        def SetWallpaper(self, mid, path):
+            return None
+
+        def GetPosition(self):
+            return 4
+
+    orig = wallpaper._get_wallpaper_com
+    wallpaper._get_wallpaper_com = lambda: FakeDW()
+    try:
+        cfg = dict(config.DEFAULTS)
+        cfg.update({"output_dir": d, "fade_native": False})
+        monitors = [{"id": "MONO", "w": 800, "h": 600, "left": 0, "top": 0}]
+        meta = {"title": "确定性", "artist": "test", "album": "album", "filename": "a.flac",
+                "duration_ms": 180000, "samplerate": 48000, "file_size": 123, "bit_rate": 800}
+        hashes = []
+        for _ in range(2):
+            paths = wallpaper.render_and_apply(b"\x89PNG" + os.urandom(64), meta, cfg, monitors)
+            hashes.append(_h.sha256(open(paths[0], "rb").read()).hexdigest())
+        assert hashes[0] == hashes[1], f"相同输入渲染结果不同：{hashes}"
+    finally:
+        wallpaper._get_wallpaper_com = orig
+
+
+# ---- 55 文字图层复用（每次渲染省一次整屏分配） ----
+def c55():
+    src = open("aimp_wallpaper/wallpaper.py", encoding="utf-8").read()
+    assert "_TEXT_LAYERS" in src, "文字图层应复用而非每次新建"
+
+
 # ---- 30(旧) 配置往返（回归护栏） ----
 def c30_cfg():
     p = os.path.join(TMP, "c30.json")
@@ -894,6 +961,12 @@ for n, title, fn in [
     (47, "退出先停渲染再恢复（恢复不被覆盖）", c47),
     (48, "配置并发写不互踩（唯一 tmp）", c48),
     (49, "SendMessageTimeoutW 回值 64 位声明", c49),
+    (50, "播放/暂停状态通知即时唤醒 worker", c50),
+    (51, "静止时跳过进度轮询", c51),
+    (52, "背景/封面缓存只留当前 1 张", c52),
+    (53, "频谱静默帧跳过重绘", c53),
+    (54, "渲染确定性（相同输入相同输出）", c54),
+    (55, "文字图层复用", c55),
 ]:
     check(n, title, fn)
 

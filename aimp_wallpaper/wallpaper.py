@@ -892,7 +892,12 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
             + int(cfg.get("text_offset_x", 0) or 0)
         tw_max = w - tx - int(w * 0.06)
         if tw_max > w * 0.12:  # 门槛按宽度算（原按高度会把竖屏的窄文本区整个跳过）
-            layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            layer = _TEXT_LAYERS.get((w, h))
+            if layer is None:
+                layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                _TEXT_LAYERS[(w, h)] = layer
+            else:
+                ImageDraw.Draw(layer).rectangle((0, 0, w, h), fill=(0, 0, 0, 0))  # 清层复用
             draw = ImageDraw.Draw(layer)
             texts = {
                 "title": meta.get("title") or "未知曲目",
@@ -1023,8 +1028,8 @@ def _open_cover(cover_bytes: bytes | None) -> Image.Image | None:
                 im = im.convert('RGB')  # 封面不需要 alpha，RGB 直接省 1/4
         except Exception:  # OSError / PIL DecompressionBombError 等——此前只捕 OSError，
             im = None      # 异常封面会让这首歌的渲染每一轮都失败（壁纸卡在上一首）
-        if len(_COVER_CACHE) > 2:
-            _COVER_CACHE.clear()
+        if len(_COVER_CACHE) > 1:  # 只缓存当前封面：同专辑连播必命中，换专辑才重新解码
+            _COVER_CACHE.clear()   # 2048px 封面 ~12MB/张，只留 1 张省 12MB
         if im is not None:
             _COVER_CACHE[key] = im
     return im
@@ -1032,6 +1037,7 @@ def _open_cover(cover_bytes: bytes | None) -> Image.Image | None:
 
 _COVER_CACHE: dict = {}
 _BG_CACHE: dict = {}
+_TEXT_LAYERS: dict = {}  # (w, h) -> RGBA 文字图层复用（每次渲染省一次整屏分配+GC）
 
 
 def _get_bg(cover_bytes: bytes | None, w: int, h: int, cfg: dict) -> Image.Image:
@@ -1041,9 +1047,9 @@ def _get_bg(cover_bytes: bytes | None, w: int, h: int, cfg: dict) -> Image.Image
     bg = _BG_CACHE.get(key)
     if bg is None:
         bg = _blur_bg(_open_cover(cover_bytes), w, h, cfg).convert("RGBA")
-        if len(_BG_CACHE) > 2:
-            _BG_CACHE.clear()  # 每张是整屏 RGBA（~8MB），2 张够 A/B 交替
-        _BG_CACHE[key] = bg
+        if len(_BG_CACHE) > 1:
+            _BG_CACHE.clear()  # 只缓存当前背景：A/B 交替共用同一封面，1 张即够。
+        _BG_CACHE[key] = bg    # 1080p 省 8MB、4K 省 33MB（RGBA 整屏每张），显示无差别
     return bg
 
 

@@ -414,10 +414,21 @@ class AimpIPC(threading.Thread):
             wp = int(wparam)
             if wp in (1, 2):           # 切歌 / 电台换曲：可信，立即提交
                 self._on_track(force=True)
-            elif wp == 3 and int(lparam) & 0xFFFF == P_POSITION:
-                with self._lock:       # 进度推进通知
-                    self._snap["position_ms"] = self._prop(P_POSITION)
-                    self._snap["duration_ms"] = self._prop(P_DURATION)
+            elif wp == 3:
+                prop = int(lparam) & 0xFFFF
+                # 属性读取全部在锁外：持锁发 SendMessage 会在 AIMP 挂死时死锁
+                if prop == P_POSITION:
+                    pos = self._prop(P_POSITION)
+                    dur = self._prop(P_DURATION)
+                    with self._lock:   # 进度推进通知
+                        self._snap["position_ms"] = pos
+                        self._snap["duration_ms"] = dur
+                if prop == P_STATE:
+                    st = self._prop(P_STATE)
+                    with self._lock:
+                        self._snap["state"] = st
+                    # 播放/暂停翻转即时唤醒 worker：此前靠 0.5s 轮询，暂停反馈慢半拍
+                    self._track_evt.set()
             return 0
         if msg == WM_TIMER:
             self._on_timer()
@@ -437,12 +448,16 @@ class AimpIPC(threading.Thread):
         # 属性读取全部在锁外：此前有轮询在持锁状态下发 SendMessage，
         # AIMP 挂死时锁被无限持有，snapshot() 的所有消费线程跟着死锁
         state = self._prop(P_STATE)
-        pos = self._prop(P_POSITION)
-        dur = self._prop(P_DURATION)
+        if state == STATE_PLAYING:
+            pos = self._prop(P_POSITION)
+            dur = self._prop(P_DURATION)
+        else:
+            pos = dur = None  # 暂停/停止时进度静止：省掉 2 次消息往返
         with self._lock:
             self._snap["state"] = state
-            self._snap["position_ms"] = pos
-            self._snap["duration_ms"] = dur
+            if pos is not None:
+                self._snap["position_ms"] = pos
+                self._snap["duration_ms"] = dur
         self._on_track()
         # 封面重试窗口：还没拿到（evt 未置位）就按节拍重试，超窗放弃
         if self._cover_retry_until:

@@ -342,6 +342,14 @@ class VisPanel:
         smooth = prev_t[:self.n_bands] + (target[:self.n_bands] - prev_t[:self.n_bands]) * alpha
         self._disp = np.maximum(smooth, self._disp * bar_fall)
 
+        # 静默帧跳过：条形完全衰减后（无声音/暂停），跳过绘制与上屏——
+        # 此前 30fps 一直重绘全透明帧白烧 CPU；恢复有声立刻恢复逐帧
+        idle = (float(self._disp.max()) <= 0.003
+                and float(self._peaks.max()) <= 0.003 and not self._status_text)
+        if idle and getattr(self, "_was_idle", False):
+            return
+        self._was_idle = idle
+
         cy = self.H // 2
         ymax = (self.H // 2) - self.pad - int(2 * self.s)
         dot_h = max(1, int(self.s))
