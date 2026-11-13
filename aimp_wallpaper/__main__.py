@@ -35,7 +35,7 @@ def _set_dpi_aware():
             pass
 
 
-def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
+def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event, round_done: threading.Event):
     import comtypes
     comtypes.CoInitialize()  # COM 需在本线程初始化
     wallpaper.capture_original(cfg)
@@ -44,6 +44,8 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
              "dark": None, "dark_t": 0.0, "paused": False}
 
     def render(cover, meta, why: str) -> bool:
+        if stop.is_set():
+            return False  # 已开始退出：绝不能再把渲染图写到"恢复原壁纸"之后
         try:
             # 暂停反馈在渲染时实时判定（pause_mode 开且未在播放），所有渲染路径统一
             paused = (cfg.get("pause_mode", "off") != "off"
@@ -66,6 +68,7 @@ def wallpaper_worker(ipc: AimpIPC, cfg: dict, stop: threading.Event):
         except Exception:
             applog.log_exc("壁纸线程单轮异常（已跳过本轮继续）:\n", *sys.exc_info())
             time.sleep(0.5)
+        round_done.set()  # 每轮结束置位：退出时等"最后一轮渲染落地"再恢复原壁纸
 
 
 def _worker_round(ipc, cfg, stop, render, state: dict):
@@ -206,7 +209,9 @@ def main():
     ipc = AimpIPC()
     ipc.start()
     stop = threading.Event()
-    threading.Thread(target=wallpaper_worker, args=(ipc, cfg, stop), daemon=True, name="wallpaper").start()
+    round_done = threading.Event()  # 每轮渲染结束置位：退出时等最后一轮落地再恢复壁纸
+    threading.Thread(target=wallpaper_worker, args=(ipc, cfg, stop, round_done),
+                     daemon=True, name="wallpaper").start()
 
     root = tk.Tk()
     root.title("AIMP Wallpaper")
@@ -326,8 +331,15 @@ def main():
     _real_destroy = root.destroy
 
     def _quit_app():
-        """统一退出（托盘/小部件/面板三条路都汇到这）：按设置恢复原壁纸（最多等 3s）→ 停托盘 → 销毁 UI。"""
+        """统一退出（托盘/小部件/面板三条路都汇到这）：先停渲染循环并等最后一轮
+        渲染落地 → 按设置恢复原壁纸（最多等 3s）→ 停托盘 → 销毁 UI。
+
+        此前恢复线程与壁纸线程并发：恰在切歌瞬间退出时，worker 的最后一轮渲染
+        会把刚恢复的原壁纸覆盖回去（桌面留我们的渲染图）。
+        """
         applog.log("退出开始")
+        stop.set()
+        round_done.wait(2.0)  # 等当前轮落地（render 内也检查 stop，迟到轮不会落盘）
         if cfg.get("restore_on_quit", True):
             done = threading.Event()
 

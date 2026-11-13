@@ -781,6 +781,56 @@ def c46():
     assert "_active" in ast.dump(node), "_on_close 应清 _active"
 
 
+# ---- 47 退出先停渲染再恢复原壁纸（此前恢复线程与 worker 并发，恢复被最后一轮渲染覆盖） ----
+def c47():
+    src = open("aimp_wallpaper/__main__.py", encoding="utf-8").read()
+    seg = src.split("def _quit_app", 1)[1]
+    idx_stop = seg.find("stop.set()")
+    idx_wait = seg.find("round_done.wait")
+    idx_restore = seg.find("restore_original")
+    assert 0 <= idx_stop < idx_wait < idx_restore, \
+        f"退出顺序必须 stop.set → 等轮次落地 → 恢复（{idx_stop}/{idx_wait}/{idx_restore}）"
+    wseg = src.split("def wallpaper_worker", 1)[1].split("def _acquire_single_instance_mutex", 1)[0]
+    assert "if stop.is_set():" in wseg and "round_done.set()" in wseg, \
+        "worker 应上报每轮结束且 render 检查 stop（迟到轮不得落盘）"
+
+
+# ---- 48 配置并发写不互踩（此前共用 .tmp，两线程同写=装进半截文件） ----
+def c48():
+    import threading as _t
+    p = os.path.join(TMP, "c48.json")
+    config.CONFIG_PATH = p
+    errors = []
+
+    def writer(tag):
+        try:
+            for i in range(25):
+                cfg = dict(config.DEFAULTS)
+                cfg["title_color"] = f"#{tag:02d}0000" if False else "#123456"
+                cfg["blur_radius"] = i
+                config.save(cfg)
+        except Exception as e:  # noqa: BLE001
+            errors.append(repr(e))
+
+    ts = [_t.Thread(target=writer, args=(k,)) for k in range(4)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert not errors, f"并发 save 出错：{errors[:2]}"
+    data = json.load(open(p, encoding="utf-8"))  # 能解析=没有被半截文件污染
+    assert isinstance(data, dict) and "title_color" in data
+    leftovers = [f for f in os.listdir(TMP) if f.startswith("c48.json.") and f.endswith(".tmp")]
+    assert not leftovers, f"tmp 残留：{leftovers}"
+
+
+# ---- 49 SendMessageTimeoutW 回值按 64 位声明（默认 c_int 截断 LRESULT） ----
+def c49():
+    src = open("aimp_wallpaper/aimp_api.py", encoding="utf-8").read()
+    assert "SendMessageTimeoutW.restype = c_ssize_t" in src, "回值应按 c_ssize_t 声明"
+    assert "SendMessageTimeoutW.argtypes" in src, "参数表应显式声明"
+
+
 # ---- 30(旧) 配置往返（回归护栏） ----
 def c30_cfg():
     p = os.path.join(TMP, "c30.json")
@@ -841,6 +891,9 @@ for n, title, fn in [
     (44, "退出停歌词抓取线程", c44),
     (45, "volume 死轮询删除", c45),
     (46, "设置窗单例死引用清理", c46),
+    (47, "退出先停渲染再恢复（恢复不被覆盖）", c47),
+    (48, "配置并发写不互踩（唯一 tmp）", c48),
+    (49, "SendMessageTimeoutW 回值 64 位声明", c49),
 ]:
     check(n, title, fn)
 

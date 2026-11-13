@@ -99,6 +99,10 @@ ALBUMART_MAGIC = 0x41495043  # "AIPC"
 
 _SMTO_ABORTIFHUNG = 2
 
+user32.SendMessageTimeoutW.restype = c_ssize_t  # LRESULT 64 位：默认 c_int 会截断回值
+user32.SendMessageTimeoutW.argtypes = [HWND, UINT, WPARAM, LPARAM, UINT, UINT, POINTER(c_size_t)]
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
 
 def _send_timeout(hwnd, msg, wparam, lparam, timeout_ms=1000) -> int:
     """带超时的 SendMessage：AIMP 挂死/模态卡住时，IPC 线程绝不能卡死在内核

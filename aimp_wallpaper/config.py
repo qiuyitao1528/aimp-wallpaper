@@ -3,6 +3,8 @@ import json
 import os
 import shutil
 import sys
+import threading
+import time
 
 
 def _resolve_config_path() -> str:
@@ -199,8 +201,25 @@ def load() -> dict:
 def save(cfg: dict) -> None:
     slim = {k: v for k, v in cfg.items() if k in DEFAULTS}
     # 原子写：直接覆写 CONFIG_PATH 时进程被杀/断电会留下半截 JSON，
-    # 下次启动 load() 解析失败 → 全部设置静默回默认
-    tmp = CONFIG_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(slim, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, CONFIG_PATH)
+    # 下次启动 load() 解析失败 → 全部设置静默回默认。
+    # tmp 按 线程id 唯一：worker 与主线程并发 save 时共用一个 tmp 会互相截断
+    tmp = f"{CONFIG_PATH}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(slim, f, ensure_ascii=False, indent=2)
+        # Windows 上并发 replace 同一目标会瞬态 PermissionError（杀软/占用扫描），
+        # 重试几次；反复失败按原异常上抛
+        for attempt in range(6):
+            try:
+                os.replace(tmp, CONFIG_PATH)
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.02)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
