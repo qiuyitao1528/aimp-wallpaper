@@ -214,6 +214,7 @@ def main():
     root.report_callback_exception = lambda t, v, tb: applog.log_exc("Tk 回调异常:\n", t, v, tb)
 
     panel = {"obj": None}
+    _panel_state = {"sig": None, "built": None}  # 配置监视基线：sig=(宽,高,隐) built=建面板时的(宽,高)
 
     def show_vis():
         applog.log("show_vis")
@@ -228,12 +229,16 @@ def main():
                 config.save(cfg)
         else:
             panel["obj"].show()
+        _panel_state["built"] = (int(cfg.get("vis_width", 420) or 420),
+                                 int(cfg.get("vis_height", 120) or 120))
 
     if not cfg.get("vis_hidden"):
         try:
             panel["obj"] = VisPanel(root, cfg)
         except Exception:
             applog.log_exc("启动建面板失败:\n", *sys.exc_info())
+        _panel_state["built"] = (int(cfg.get("vis_width", 420) or 420),
+                                 int(cfg.get("vis_height", 120) or 120))
 
     lyrics = {"obj": None, "fetcher": None}
 
@@ -260,9 +265,7 @@ def main():
 
     # 面板配置监视：设置里改 面板宽度/高度/显示频谱面板 后 1s 内生效。
     # VisPanel 只在创建时读宽高，尺寸变化必须停采集线程后整体重建；
-    # 可见状态下任何变化都重建（语义最稳），隐藏状态下只收起不重建。
-    _panel_state = {"sig": None}
-
+    # 隐藏时只收起；重现且尺寸没变时只 deiconify（托盘开关不触发无谓重建）。
     def _watch_panel():
         try:
             w = int(cfg.get("vis_width", 420) or 420)
@@ -270,24 +273,25 @@ def main():
             hidden = bool(cfg.get("vis_hidden"))
             sig = (w, h, hidden)
             prev = _panel_state["sig"]
-            if prev is None:
+            if sig != prev:
                 _panel_state["sig"] = sig
-                return
-            if sig == prev:
-                return
-            _panel_state["sig"] = sig
-            p = panel["obj"]
-            if hidden:
-                if p is not None:
-                    p.win.withdraw()  # 不走 hide()：不回写 cfg
-            else:
-                if p is not None:
-                    p.shutdown()
-                    panel["obj"] = None
-                show_vis()
+                if prev is not None:  # 首轮只记基线，不动作
+                    p = panel["obj"]
+                    if hidden:
+                        if p is not None:
+                            p.win.withdraw()  # 不走 hide()：不回写 cfg
+                    elif p is None:
+                        show_vis()
+                    elif (w, h) != _panel_state["built"]:
+                        p.shutdown()  # 尺寸变了：停采集+销毁，整体重建
+                        panel["obj"] = None
+                        show_vis()
+                    else:
+                        p.win.deiconify()
+                        p._seat_above_desktop()
         except Exception:
             applog.log_exc("面板配置监视异常:\n", *sys.exc_info())
-        root.after(1000, _watch_panel)
+        root.after(1000, _watch_panel)  # 无条件重排：任何分支都不能断链
 
     _panel_state["sig"] = (int(cfg.get("vis_width", 420) or 420),
                            int(cfg.get("vis_height", 120) or 120), bool(cfg.get("vis_hidden")))

@@ -138,13 +138,16 @@ def _get_wallpaper_com():
     return comtypes.CoCreateInstance(CLSID_DesktopWallpaper, interface=IDesktopWallpaper)
 
 
-_SLOT = {"i": 0}
+_SLOT = {"n": 0}
 
 
-def _next_slot() -> str:
-    """输出文件名槽位 A/B 交替：避免新旧壁纸同路径（同路径 explorer 不做过渡）。"""
-    _SLOT["i"] ^= 1
-    return "A" if _SLOT["i"] else "B"
+def _slot_for(monitor_index: int) -> str:
+    """输出文件名槽位 A/B 交替：避免新旧壁纸同路径（同路径 explorer 不做过渡）。
+
+    按「渲染轮次+屏序号」交替：多屏时每块屏各自 A/B 轮换。此前全局交替会让
+    双屏每轮都覆写"正被 explorer 引用"的同一个文件（m1 永远 A），过渡失效/闪烁。
+    """
+    return "A" if (_SLOT["n"] + monitor_index) % 2 == 0 else "B"
 
 
 _MON_CACHE: tuple | None = None
@@ -563,12 +566,13 @@ def _ellipsis(draw, text, font, max_w):
     return (text + "…") if text else "…"
 
 
-def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0, line_limit=None):
+def _wrap_title(draw, text, font, max_w, max_lines=4, space_window=0):
     """按像素宽度折行（最多 max_lines 行），超限直接截断、无省略号。
 
     space_window>0：折行点**之前** space_window 个字符内有空格时，把断点前移到该空格之后
     （避免把单词/词组切开）；找不到则按宽度直接断。0 = 纯按宽度折行。
-    line_limit：单行硬宽度上限（通常 = 文字起点到屏幕右缘的预算），用于兜底防越界。
+    输出不变量：每行宽度 ≤ max_w（此前签名叫了个从不生效的 line_limit 参数，
+    文档声称兜底防越界——实际折行路径本身已保证不越界，参数纯属误导，已删）。
     """
     if max_lines <= 1:
         return [_ellipsis(draw, text, font, max_w)]
@@ -886,8 +890,6 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
         tx = cover_x + cw + int(dim * 0.055) \
             + int(cfg.get("text_offset_x", 0) or 0)
         tw_max = w - tx - int(w * 0.06)
-        # 单行硬上限：从文字起点到屏幕右缘留 2% 边距（吸收超它就放弃，绝不出屏）
-        line_limit = max(tw_max, w - tx - int(w * 0.02))
         if tw_max > w * 0.12:  # 门槛按宽度算（原按高度会把竖屏的窄文本区整个跳过）
             layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             draw = ImageDraw.Draw(layer)
@@ -923,7 +925,7 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                 if overflow == "wrap":  # 折行最多 4 行，无省略号（超限截断）
                     lines = _wrap_title(
                         draw, text, font, tw_max, 4,
-                        max(0, min(10, int(cfg.get(f"{g}_space_window", 0) or 0))), line_limit)
+                        max(0, min(10, int(cfg.get(f"{g}_space_window", 0) or 0))))
                 else:
                     lines = [_ellipsis(draw, text, font, tw_max)]
                 blocks.append((g, lines, font, _hex_rgb(cfg.get(f"{g}_color"), (255, 255, 255)),
@@ -1055,13 +1057,14 @@ def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors:
     targets = _filter_monitors(monitors, cfg.get("monitors", "all"))
     paths = []
     anchor = None
+    _SLOT["n"] += 1  # 新一轮渲染：每块屏的 A/B 槽位翻转
     for i, m in enumerate(targets):
         bg = _get_bg(cover_bytes, m["w"], m["h"], cfg)
         img, anchor_i = render_poster(cover_bytes, meta, m["w"], m["h"], cfg,
                                       want_anchor=True, bg=bg, paused=paused)
         if i == 0:
             anchor = anchor_i
-        path = os.path.join(out_dir, f"wallpaper_{m['w']}x{m['h']}_{_next_slot()}.png")
+        path = os.path.join(out_dir, f"wallpaper_{m['w']}x{m['h']}_{_slot_for(i)}.png")
         img.save(path, "PNG", optimize=False, compress_level=1)
         legacy = os.path.join(out_dir, f"wallpaper_{m['w']}x{m['h']}.jpg")
         if os.path.exists(legacy):
@@ -1098,6 +1101,12 @@ def render_and_apply(cover_bytes: bytes | None, meta: dict, cfg: dict, monitors:
         try:
             with open(os.path.join(out_dir, "vis_anchor.json"), "w", encoding="utf-8") as f:
                 json.dump(data, f)
+        except OSError:
+            pass
+    elif not anchor:
+        # 无锚点（关文字总开关/窗口太窄）：删掉旧锚点，否则面板/歌词会钉在已消失的文字区位置
+        try:
+            os.remove(os.path.join(out_dir, "vis_anchor.json"))
         except OSError:
             pass
     return paths

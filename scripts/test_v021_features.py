@@ -88,12 +88,11 @@ lines_none = wallpaper._wrap_title(draw, "aaaaXXbbXXcc", font, max_w, 2, space_w
 check("wrap no-space fallback", len(lines_none) == 2, ascii(lines_none))
 # 短文本不折行
 check("wrap fits", wallpaper._wrap_title(draw, "hi", font, 10_000, 2, 5) == ["hi"])
-# 吸收宽度上限：吸收后超过 line_limit 则放弃，绝不出屏
+# 吸收宽度上限已由折行本身保证：断在空格后不超 max_w（line_limit 死参数已删）
 ws1 = wallpaper._text_len(draw, "aaaa bbbb", font)
 ws2 = wallpaper._text_len(draw, "aaaa bbbbb", font)
 ls = wallpaper._wrap_title(draw, "aaaa bbbbb ccc", font, (ws1 + ws2) / 2, 2,
-                           space_window=10,
-                           line_limit=wallpaper._text_len(draw, "aaaa bbbbb ", font) - 10)
+                           space_window=10)
 print("space guard:", ascii(ls))
 check("space break guarded", ls[0] == "aaaa", ascii(ls))
 # 超过窗口距离的空格不生效（window=2 时 3 个字符外的空格不算）
@@ -102,7 +101,7 @@ check("window limited", far[0] != "aaaa", ascii(far))
 # 实际事故回归：长标题折行后任何行都不越屏幕预算
 title_r = "Cry For Me (feat. Ami) (为我哭泣)"
 wr = wallpaper._text_len(draw, "Cry For Me (feat.", font)
-lr2 = wallpaper._wrap_title(draw, title_r, font, wr, 3, 5, wr + 60)
+lr2 = wallpaper._wrap_title(draw, title_r, font, wr, 3, 5)
 print("real case:", ascii(lr2))
 check("real case within limit", all(wallpaper._text_len(draw, ln, font) <= wr + 60 for ln in lr2),
       ascii(lr2))
@@ -794,11 +793,15 @@ check("missing keys appended", np.abs(arr(img_miss_a) - arr(img_miss_b)).sum() >
 print()
 
 # ---------- M. 原生壁纸过渡 ----------
-from aimp_wallpaper.wallpaper import _next_slot  # noqa: E402
+from aimp_wallpaper.wallpaper import _slot_for  # noqa: E402
 
-slots = [_next_slot() for _ in range(4)]
-check("wallpaper slot alternates", all(a != b for a, b in zip(slots, slots[1:])) and set(slots) <= {"A", "B"},
-      str(slots))
+wallpaper._SLOT["n"] = 0
+rounds = []
+for _ in range(4):
+    wallpaper._SLOT["n"] += 1
+    rounds.append([_slot_for(i) for i in range(2)])
+check("wallpaper slot alternates", all(r[0] != r[1] for r in rounds)
+      and rounds[0][0] != rounds[1][0] and set(rounds[0]) <= {"A", "B"}, str(rounds))
 check("fade_native default on", config.DEFAULTS.get("fade_native") is True)
 check("slideshow vtable declared", hasattr(wallpaper, "_arm_native_fade")
       and hasattr(wallpaper, "_shell_item_array"))

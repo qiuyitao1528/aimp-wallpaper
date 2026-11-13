@@ -170,7 +170,10 @@ class VisPanel:
         return pos, mtime
 
     def _auto_pos(self):
-        """自动模式：优先锚点（专辑名正下方再留一档间距，间距可调），否则右下角兜底。"""
+        """自动模式：优先锚点（专辑名正下方再留一档间距，间距可调），否则右下角兜底。
+
+        兜底位置锚主屏工作区（任务栏之上）；钳制用虚拟屏——面板拖到副屏时不被拽回主屏。
+        """
         pos, _ = self._anchor_pos()
         wa_l, wa_t, wa_r, wa_b = desktop.work_area()
         gap = max(0, int(self.cfg.get("vis_anchor_gap", 10) or 10)) * int(self.s)
@@ -178,8 +181,9 @@ class VisPanel:
             x, y = pos[0], pos[1] + gap  # 锚点(文字块底部)与面板的间距，可调
         else:
             x, y = wa_r - self.W - int(24 * self.s), wa_b - self.H - int(14 * self.s)
-        x = max(wa_l, min(x, wa_r - self.W))
-        y = max(wa_t, min(y, wa_b - self.H))
+        vx_l, vx_t, vx_r, vx_b = desktop.virtual_screen()
+        x = max(vx_l, min(x, vx_r - self.W))
+        y = max(vx_t, min(y, vx_b - self.H))
         return x, y
 
     def _place_initial(self):
@@ -250,13 +254,18 @@ class VisPanel:
         self._seat_above_desktop()
 
     def shutdown(self):
-        """彻底销毁面板（设置改宽高后重建用）：停频谱采集线程 + 注销覆盖层 + 关窗。"""
+        """彻底销毁面板（设置改宽高后重建用）：停频谱采集线程 + 注销覆盖层 + 释放表面 + 关窗。"""
         try:
             self.spec.stop()
         except Exception:
             pass
         try:
             desktop.unregister_overlay(self._hwnd)
+        except Exception:
+            pass
+        try:
+            if self.surface is not None:
+                self.surface.close()  # 不释放的话每次重建漏一张 DIB（~2MB）+ 一个 DC
         except Exception:
             pass
         try:
@@ -283,7 +292,17 @@ class VisPanel:
     # ---------- 帧循环：插值 + 包络 + 双渲染路径 ----------
 
     def _frame(self):
+        # 整帧防护：任何一帧的异常都不允许断掉 after 链——链一断面板动画就永久
+        # 冻结（歌词窗 _tick 有同款防护，此前这里没有）
         t0 = time.monotonic()
+        try:
+            self._frame_inner(t0)
+        except Exception:
+            applog.log_exc("频谱帧异常:\n", *sys.exc_info())
+        # 自适应节奏：本帧耗时从间隔里扣除，避免 after 漂移累积
+        self.win.after(max(5, self.frame_ms - int((time.monotonic() - t0) * 1000)), self._frame)
+
+    def _frame_inner(self, t0):
         # 刷新率（vis_fps 设置，10~60）；衰减系数按秒归一，任意刷新率手感一致
         fps = max(10, min(120, int(self.cfg.get("vis_fps", 30) or 30)))
         self.frame_ms = int(round(1000 / fps))
@@ -299,7 +318,6 @@ class VisPanel:
         target, prev_t, t_prev, t_curr = self.spec.interp_snapshot()
         if self.spec.err:
             self._set_status(f"音频采集失败：{self.spec.err[:48]}")
-            self.win.after(1000, self._frame)
             return
         self._set_status(None)
 
@@ -323,9 +341,6 @@ class VisPanel:
                 self._make_canvas_items()
         else:
             self._render_canvas(cy, ymax, dot_h, peak_fall, peak_drop)
-
-        # 自适应节奏：本帧耗时从间隔里扣除，避免 after 漂移累积
-        self.win.after(max(5, self.frame_ms - int((time.monotonic() - t0) * 1000)), self._frame)
 
     def _set_status(self, text: str | None):
         """状态文字（None=清除）。"""

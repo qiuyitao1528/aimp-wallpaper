@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import threading
+import time
 import tkinter as tk
 from ctypes import byref
 
@@ -59,7 +60,10 @@ _LYRIC_KEYS = {"lyrics", "unsyncedlyrics", "unsynced lyrics", "letra", "paroles"
 
 
 def _read_flac_lyrics(f) -> list[str]:
-    """FLAC：遍历元数据块收集所有 VORBIS_COMMENT 里的 LYRICS 字段（可能有简繁多版本）。"""
+    """FLAC：遍历元数据块收集所有 VORBIS_COMMENT 里的 LYRICS 字段（可能有简繁多版本）。
+
+    此前只看第一个 COMMENT 块就返回——歌词写在后面的 COMMENT 块时读不到。
+    """
     f.seek(0)
     if f.read(4) != b"fLaC":
         return []
@@ -70,38 +74,35 @@ def _read_flac_lyrics(f) -> list[str]:
         f.seek(pos)
         hdr = f.read(4)
         if len(hdr) < 4:
-            return None
+            break
         last = bool(hdr[0] & 0x80)
         btype = hdr[0] & 0x7F
         length = int.from_bytes(hdr[1:4], "big")
         if btype == 4 and 0 < length < 4_000_000:  # VORBIS_COMMENT
             data = f.read(length)
-            if len(data) < 8:
-                return found
-            vlen = int.from_bytes(data[0:4], "little")
-            p = 4 + vlen
-            if p + 4 > len(data):
-                return found
-            count = int.from_bytes(data[p:p + 4], "little")
-            p += 4
-            for _ in range(min(count, 512)):
-                if p + 4 > len(data):
-                    break
-                clen = int.from_bytes(data[p:p + 4], "little")
-                p += 4
-                raw = data[p:p + clen]
-                p += clen
-                if b"=" not in raw:
-                    continue
-                k, v = raw.split(b"=", 1)
-                key = k.decode("ascii", "ignore").strip().lower()
-                if key in _LYRIC_KEYS:
-                    text = v.decode("utf-8", "replace")
-                    if text.strip():
-                        found.append(text)
-            return found
+            if len(data) >= 8:
+                vlen = int.from_bytes(data[0:4], "little")
+                p = 4 + vlen
+                if p + 4 <= len(data):
+                    count = int.from_bytes(data[p:p + 4], "little")
+                    p += 4
+                    for _ in range(min(count, 512)):
+                        if p + 4 > len(data):
+                            break
+                        clen = int.from_bytes(data[p:p + 4], "little")
+                        p += 4
+                        raw = data[p:p + clen]
+                        p += clen
+                        if b"=" not in raw:
+                            continue
+                        k, v = raw.split(b"=", 1)
+                        key = k.decode("ascii", "ignore").strip().lower()
+                        if key in _LYRIC_KEYS:
+                            text = v.decode("utf-8", "replace")
+                            if text.strip():
+                                found.append(text)
         pos += 4 + length
-    return None
+    return found
 
 
 # 简繁判定用"仅繁体"字形集：出现即视为繁体（这些字简体写法不同，不会误判）
@@ -150,8 +151,36 @@ def _synchsafe(b: bytes) -> int:
     return (b[0] << 21) | (b[1] << 14) | (b[2] << 7) | b[3]
 
 
+def _decode_uslt_body(raw: bytes) -> str | None:
+    """USLT 帧体解码：编码(1) + 语言(3) + 描述(0 结尾) + 歌词。"""
+    if not raw:
+        return None
+    enc = raw[0]
+    rest = raw[4:]  # 跳过编码+语言
+    try:
+        if enc == 1:  # UTF-16 with BOM
+            desc_end = rest.find(b"\x00\x00")
+            if desc_end < 0:
+                return None
+            text = rest[desc_end + 2:].decode("utf-16", "replace")
+        elif enc == 2:  # UTF-16BE
+            text = rest.decode("utf-16-be", "replace")
+        elif enc == 3:  # UTF-8
+            text = rest.split(b"\x00", 1)[-1].decode("utf-8", "replace")
+        else:  # latin-1
+            text = rest.split(b"\x00", 1)[-1].decode("latin-1", "replace")
+    except (UnicodeDecodeError, IndexError):
+        return None
+    text = text.replace("\x00", "").strip()
+    return text or None
+
+
 def _read_id3_lyrics(f) -> str | None:
-    """MP3/M4A 前部 ID3v2：找 USLT（unsigned lyrics）帧。"""
+    """MP3/M4A 前部 ID3v2：找 USLT（unsigned lyrics）帧。
+
+    v2.3/v2.4 帧头 10 字节（USLT）；v2.2 帧头 6 字节且帧名是 3 字符的 ULT——
+    此前只按 10 字节头扫，v2.2 老文件的歌词永远读不到。
+    """
     f.seek(0)
     head = f.read(10)
     if len(head) < 10 or head[:3] != b"ID3":
@@ -161,38 +190,30 @@ def _read_id3_lyrics(f) -> str | None:
     body = f.read(min(size, 8_000_000))
     if major < 2:
         return None
+    if major == 2:
+        off = 0
+        while off + 6 <= len(body):
+            fid = body[off:off + 3]
+            if not fid.strip(b"\x00"):
+                break
+            fsize = int.from_bytes(body[off + 3:off + 6], "big")
+            if fid == b"ULT":
+                text = _decode_uslt_body(body[off + 6:off + 6 + fsize])
+                if text:
+                    return text
+            off += 6 + fsize
+        return None
     off = 0
     while off + 10 <= len(body):
         fid = body[off:off + 4]
         if not fid.strip(b"\x00"):
             break
-        if fid == b"USLT":
-            fsize = _synchsafe(body[off + 4:off + 8]) if major >= 4 else \
-                int.from_bytes(body[off + 4:off + 8], "big")
-            raw = body[off + 10:off + 10 + fsize]
-            # 帧体：编码(1) + 语言(3) + 描述(0 结尾) + 歌词
-            if not raw:
-                return None
-            enc = raw[0]
-            rest = raw[4:]  # 跳过编码+语言
-            try:
-                if enc == 1:  # UTF-16 with BOM
-                    desc_end = rest.find(b"\x00\x00")
-                    if desc_end < 0:
-                        return None
-                    text = rest[desc_end + 2:].decode("utf-16", "replace")
-                elif enc == 2:  # UTF-16BE
-                    text = rest.decode("utf-16-be", "replace")
-                elif enc == 3:  # UTF-8
-                    text = rest.split(b"\x00", 1)[-1].decode("utf-8", "replace")
-                else:  # latin-1
-                    text = rest.split(b"\x00", 1)[-1].decode("latin-1", "replace")
-            except (UnicodeDecodeError, IndexError):
-                return None
-            text = text.replace("\x00", "").strip()
-            return text or None
         fsize = _synchsafe(body[off + 4:off + 8]) if major >= 4 else \
             int.from_bytes(body[off + 4:off + 8], "big")
+        if fid == b"USLT":
+            text = _decode_uslt_body(body[off + 10:off + 10 + fsize])
+            if text:
+                return text
         off += 10 + fsize
     return None
 
@@ -227,7 +248,8 @@ def _local_lrc_candidates(audio_path: str, title: str) -> list[str]:
 def _pair_lyrics(orig: list[tuple[int, str]], trans_lines: list[tuple[int, str]] | None = None):
     """合并原文/翻译 → [(ms, 原文, 翻译)]。
 
-    网易云：tlyric 按时间戳精确配对；本地双语 LRC：同时间戳连续双行，第二行视为翻译。
+    网易云：tlyric 按时间戳精确配对；本地双语 LRC：同时间戳连续双行（内容不同），
+    第二行视为翻译——完全相同的重复行是副歌回声，不吞（此前会被当翻译隐藏）。
     """
     tmap: dict[int, str] = {}
     for ms, t in (trans_lines or []):
@@ -237,7 +259,7 @@ def _pair_lyrics(orig: list[tuple[int, str]], trans_lines: list[tuple[int, str]]
     while i < len(orig):
         ms, text = orig[i]
         tr = tmap.get(ms, "")
-        if not tr and i + 1 < len(orig) and orig[i + 1][0] == ms:
+        if not tr and i + 1 < len(orig) and orig[i + 1][0] == ms and orig[i + 1][1] != text:
             tr = orig[i + 1][1]
             i += 1
         out.append((ms, text, tr))
@@ -253,14 +275,19 @@ def fetch_lrc(title: str, artist: str, duration_ms: int | None,
     返回 [(ms, 原文, 翻译)]（翻译可为空串）。
     """
     os.makedirs(cache_dir, exist_ok=True)
-    key = hashlib.md5(f"{title.lower()}|{artist.lower()}".encode("utf-8")).hexdigest()
+    # 缓存键必须含语言偏好：简/繁优先是不同的择优结果，共用一份缓存会让
+    # 「多语言优先」设置对已抓过的歌永远不生效
+    key = hashlib.md5(f"{title.lower()}|{artist.lower()}|{lang_pref}".encode("utf-8")).hexdigest()
     cache_file = os.path.join(cache_dir, key + ".lrc")
 
     lrc_text = None
     tlyric_text = None
+    from_cache = False
     if os.path.exists(cache_file):
         try:
-            lrc_text = open(cache_file, "r", encoding="utf-8").read()
+            with open(cache_file, "r", encoding="utf-8") as f:
+                lrc_text = f.read()
+            from_cache = bool(lrc_text)
         except OSError:
             lrc_text = None
     if lrc_text is None:  # 1) 内嵌歌词（FLAC 的 LYRICS 字段 / ID3 USLT）
@@ -270,7 +297,8 @@ def fetch_lrc(title: str, artist: str, duration_ms: int | None,
             if os.path.exists(cand):
                 for enc in ("utf-8", "gbk", "utf-16"):
                     try:
-                        lrc_text = open(cand, "r", encoding=enc).read()
+                        with open(cand, "r", encoding=enc) as f:
+                            lrc_text = f.read()
                         break
                     except (OSError, UnicodeDecodeError):
                         continue
@@ -283,8 +311,8 @@ def fetch_lrc(title: str, artist: str, duration_ms: int | None,
         lines = _pair_lyrics(lines, parse_lrc(tlyric_text))
     elif lines:
         lines = _pair_lyrics(lines)
-    if lines:
-        try:  # 回写规范化结果（翻译行与原文同时间戳），缓存命中路径也保留对照
+    if lines and not from_cache:  # 缓存命中不再回写（重复 I/O 且会抹掉原始 LRC 元数据）
+        try:  # 回写规范化结果（翻译行与原文同时间戳）
             with open(cache_file, "w", encoding="utf-8") as f:
                 f.write("\n".join(
                     f"[{ms // 60000:02d}:{ms % 60000 // 1000:02d}.{ms % 1000:03d}]{t}"
@@ -315,7 +343,8 @@ class LyricsFetcher(threading.Thread):
                 snap = self.ipc.snapshot()
                 if not snap["connected"] or not (snap["title"] or snap["filename"]):
                     continue
-                key = (snap["title"], snap["artist"])
+                # key 必须含语言偏好：切简/繁后当前歌要重抓（此前不切歌不生效）
+                key = (snap["title"], snap["artist"], self.cfg.get("lyrics_lang_pref", "zh-Hans"))
                 if key == self._key:
                     continue
                 self._key = key
@@ -407,9 +436,10 @@ class LyricsWindow:
         return pos, mtime
 
     def _auto_pos(self):
-        """自动位置（与频谱面板同构）：按跟随模式算目标，最后钳制在工作区内。
+        """自动位置（与频谱面板同构）：按跟随模式算目标，最后钳制在虚拟桌面内。
 
         与频谱面板的间距/上下位置由 lyrics_gap / lyrics_side 控制（都可调）。
+        兜底位置锚主屏工作区；钳制用虚拟屏——面板拖到副屏时不被拽回主屏。
         """
         mode = self.cfg.get("lyrics_follow", "panel")
         wa_l, wa_t, wa_r, wa_b = desktop.work_area()
@@ -432,8 +462,9 @@ class LyricsWindow:
                 x = px_
             else:
                 x, y = wa_r - self.W - int(24 * self.s), wa_b - self.H - int(14 * self.s)
-        x = max(wa_l, min(x, wa_r - self.W))
-        y = max(wa_t, min(y, wa_b - self.H))
+        vx_l, vx_t, vx_r, vx_b = desktop.virtual_screen()
+        x = max(vx_l, min(x, vx_r - self.W))
+        y = max(vx_t, min(y, vx_b - self.H))
         return x, y
 
     def H_panel(self) -> int:
@@ -641,6 +672,9 @@ class LyricsWindow:
 
     def _tick(self):
         try:
+            if time.monotonic() - getattr(self, "_last_maint", 0) >= 1.0:
+                self._last_maint = time.monotonic()
+                self._lock_var.set(bool(self.cfg.get("lyrics_locked")))  # 设置改动后同步右键菜单
             if self.cfg.get("lyrics_hidden"):
                 if self.win.winfo_viewable():
                     self.win.withdraw()  # 托盘/设置翻转 cfg 后这里自管理显隐

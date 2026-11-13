@@ -112,7 +112,7 @@ DEFAULTS = {
     "lyrics_show_next": True,   # 显示下一行原文
     "lyrics_show_trans": True,  # 显示当前行译文（仅当前行模式下关掉=严格单行）
     "lyrics_lang_pref": "zh-Hans",  # 多语言歌词优先：zh-Hans 简体 / zh-Hant 繁体 / any 取第一个
-    "lyrics_width": 420,        # 歌词窗宽度（px，重启生效）
+    "lyrics_width": 420,        # 歌词窗宽度（px，实时生效）
     "lyrics_locked": False,     # 锁定=禁拖动（仍跟随锚点）
     "lyrics_pos": None,         # 手动定位 [x, y]（拖过后粘滞）
     "lyrics_font_file": None,   # 歌词字体（None=默认雅黑加粗）
@@ -197,5 +197,9 @@ def load() -> dict:
 
 def save(cfg: dict) -> None:
     slim = {k: v for k, v in cfg.items() if k in DEFAULTS}
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+    # 原子写：直接覆写 CONFIG_PATH 时进程被杀/断电会留下半截 JSON，
+    # 下次启动 load() 解析失败 → 全部设置静默回默认
+    tmp = CONFIG_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(slim, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, CONFIG_PATH)

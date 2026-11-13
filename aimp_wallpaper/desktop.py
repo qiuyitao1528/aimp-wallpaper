@@ -238,6 +238,20 @@ def work_area() -> tuple[int, int, int, int]:
     return wa.left, wa.top, wa.right, wa.bottom
 
 
+_SM_XVIRT, _SM_YVIRT, _SM_CXVIRT, _SM_CYVIRT = 76, 77, 78, 79
+
+
+def virtual_screen() -> tuple[int, int, int, int]:
+    """整个虚拟桌面 (left, top, right, bottom)（多屏并集）。
+
+    覆盖窗位置的最终钳制要用它：work_area 只含主屏，面板被拖到副屏时
+    跟随的歌词窗会被错误地钳回主屏右缘。
+    """
+    x, y = user32.GetSystemMetrics(_SM_XVIRT), user32.GetSystemMetrics(_SM_YVIRT)
+    w, h = user32.GetSystemMetrics(_SM_CXVIRT), user32.GetSystemMetrics(_SM_CYVIRT)
+    return x, y, x + max(1, w), y + max(1, h)
+
+
 # ---------- 桌面层覆盖窗口协同：Progman 压到所有覆盖窗口之下 ----------
 
 _overlays: list[int] = []

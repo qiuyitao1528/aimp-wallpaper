@@ -80,28 +80,49 @@ class Spectrum(threading.Thread):
         return (None, pyaudio.paContinue)
 
     def run(self):
+        """采集主循环：流失效（默认输出设备切换/拔设备）后自动重建跟随新设备。
+
+        此前流一失效线程就静默退出，频谱从此冻结；错误路径也没有 terminate，
+        泄漏 WASAPI/COM 资源。两条都在这一版修掉。
+        """
         import pyaudiowpatch as pyaudio
-        try:
-            p = pyaudio.PyAudio()
-            dev = p.get_default_wasapi_loopback()
-            self._channels = max(1, int(dev.get("maxInputChannels", 2)))
-            self._sr = int(dev.get("defaultSampleRate", 48000))
-            self._compute_bins()
-            stream = p.open(format=pyaudio.paFloat32,
-                            channels=self._channels,
-                            rate=self._sr,
-                            input=True,
-                            input_device_index=dev["index"],
-                            frames_per_buffer=2048,
-                            stream_callback=self._callback)
-            stream.start_stream()
-            while not self._stop.is_set() and stream.is_active():
-                self._stop.wait(0.2)
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
-        except Exception as e:
-            self.err = str(e)
-            with self._lock:
-                self._prev_bars = self._bars = np.full(self._n, -1.0)  # UI 显示失败提示
-                self._t_prev = self._t_curr = time.monotonic()
+        while not self._stop.is_set():
+            p = None
+            stream = None
+            try:
+                p = pyaudio.PyAudio()
+                dev = p.get_default_wasapi_loopback()
+                self._channels = max(1, int(dev.get("maxInputChannels", 2)))
+                self._sr = int(dev.get("defaultSampleRate", 48000))
+                self._compute_bins()
+                stream = p.open(format=pyaudio.paFloat32,
+                                channels=self._channels,
+                                rate=self._sr,
+                                input=True,
+                                input_device_index=dev["index"],
+                                frames_per_buffer=2048,
+                                stream_callback=self._callback)
+                stream.start_stream()
+                self.err = None
+                while not self._stop.is_set() and stream.is_active():
+                    self._stop.wait(0.2)
+                # is_active 变 False：设备切换/失效 → 重建流跟随新设备
+            except Exception as e:
+                self.err = str(e)
+                with self._lock:
+                    self._prev_bars = self._bars = np.full(self._n, -1.0)  # UI 显示失败提示
+                    self._t_prev = self._t_curr = time.monotonic()
+            finally:
+                try:
+                    if stream is not None:
+                        stream.stop_stream()
+                        stream.close()
+                except Exception:
+                    pass
+                try:
+                    if p is not None:
+                        p.terminate()  # 此前错误路径不 terminate，泄漏 COM 资源
+                except Exception:
+                    pass
+            if not self._stop.is_set():
+                self._stop.wait(2.0)  # 设备恢复/切换后自动跟随
