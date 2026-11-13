@@ -7,7 +7,7 @@
 基于 AIMP 自带 Remote API，将正在播放曲目的封面与元数据实时渲染为海报式桌面壁纸，附带经典频谱可视化面板与桌面歌词。无需安装任何 AIMP 插件，支持 Windows 10 / 11。
 
 [![Version](https://img.shields.io/github/v/tag/qiuyitao1528/aimp-wallpaper?style=flat-square&color=4C8BF5&label=release)](https://github.com/qiuyitao1528/aimp-wallpaper/releases)
-[![Pre-release](https://img.shields.io/badge/pre--release-0.9.0--beta.4-FB8C00?style=flat-square)](https://github.com/qiuyitao1528/aimp-wallpaper/releases)
+[![Pre-release](https://img.shields.io/badge/pre--release-0.3.0--beta.6-FB8C00?style=flat-square)](https://github.com/qiuyitao1528/aimp-wallpaper/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows)](https://github.com/qiuyitao1528/aimp-wallpaper)
 [![Python](https://img.shields.io/badge/python-3.12+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/github/license/qiuyitao1528/aimp-wallpaper?style=flat-square&color=3DA639)](LICENSE)
