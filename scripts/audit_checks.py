@@ -898,6 +898,17 @@ def c55():
     assert "_TEXT_LAYERS" in src, "文字图层应复用而非每次新建"
 
 
+# ---- 56 默认输出设备切换：直查设备 ID 并重建流（设备切换后旧流 active 但无声） ----
+def c56():
+    src = open("aimp_wallpaper/audio_spectrum.py", encoding="utf-8").read()
+    assert "_default_endpoint_id" in src, "应直查默认渲染设备 ID"
+    assert "now_id != current_id" in src, "设备 ID 变化应触发重建"
+    rid = sys.modules.get("aimp_wallpaper.audio_spectrum")
+    from aimp_wallpaper.audio_spectrum import _default_endpoint_id  # noqa: E402
+    rid = _default_endpoint_id()
+    assert rid and rid.startswith("{"), f"真机应返回设备 ID，实际 {rid!r}"
+
+
 # ---- 30(旧) 配置往返（回归护栏） ----
 def c30_cfg():
     p = os.path.join(TMP, "c30.json")
@@ -967,6 +978,7 @@ for n, title, fn in [
     (53, "频谱静默帧跳过重绘", c53),
     (54, "渲染确定性（相同输入相同输出）", c54),
     (55, "文字图层复用", c55),
+    (56, "默认设备直查+切换重建流", c56),
 ]:
     check(n, title, fn)
 

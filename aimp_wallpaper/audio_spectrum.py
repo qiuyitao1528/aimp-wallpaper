@@ -9,14 +9,84 @@ Spectrum[channel][256] 就是原始 FFT bin（线性频率轴），显示层直�
 """
 from __future__ import annotations
 
+import ctypes
 import threading
 import time
+from ctypes import POINTER, byref, c_void_p
 
 import numpy as np
+
+_ole32 = ctypes.WinDLL("ole32", use_last_error=True)
+_ole32.CoTaskMemFree.argtypes = [c_void_p]
 
 BANDS = 48
 N_FFT = 4096
 F_MIN, F_MAX = 30.0, 16000.0  # 仅作占位，线性轴实际覆盖 0~Nyquist
+
+# Core Audio：默认渲染设备直查（用于检测系统默认输出设备切换）
+_IMMDEV_CLSID = "{BCDE0395-E52F-467C-8E3D-C4579291692E}"  # MMDeviceEnumerator
+_IMMENUM_IID = "{A95664D2-9614-4F35-A746-DE8DB63617E6}"
+_ole32 = ctypes.WinDLL("ole32", use_last_error=True)
+
+_HRESULT = ctypes.HRESULT
+
+
+def _com_release(ptr) -> None:
+    """释放 COM 对象（vtable 第 3 槽 = Release），失败忽略。"""
+    try:
+        vtbl_ptr = ctypes.cast(ptr, POINTER(c_void_p)).contents.value
+        vtbl = ctypes.cast(vtbl_ptr, POINTER(c_void_p))
+        release = ctypes.WINFUNCTYPE(ctypes.c_ulong, c_void_p)(vtbl[2])
+        release(ptr)
+    except Exception:
+        pass
+
+
+def _default_endpoint_id() -> str | None:
+    """当前默认渲染设备 ID（Core Audio 直查，微秒级，不开设备）。失败返回 None。
+
+    关键点：系统切换默认输出设备后，旧设备的 loopback 流仍处于 active 状态
+    （只是再也收不到声音），靠 is_active() 检测不到——必须比对外设 ID 主动重建。
+    走手写 vtable 直调（与 _com_release 同款），避开 comtypes 接口封装。
+    """
+    try:
+        import comtypes
+        from comtypes import GUID, POINTER
+
+        comtypes.CoInitialize()
+        ppv = c_void_p()
+        hr = _ole32.CoCreateInstance(byref(GUID(_IMMDEV_CLSID)), None, 1,  # CLSCTX_INPROC_SERVER
+                                     byref(GUID(_IMMENUM_IID)), byref(ppv))
+        if hr != 0 or not ppv.value:
+            return None
+        try:
+            enum_vtbl = ctypes.cast(ctypes.cast(ppv.value, POINTER(c_void_p)).contents.value,
+                                    POINTER(c_void_p))
+            # IMMDeviceEnumerator 槽位 4 = GetDefaultAudioEndpoint(flow, role, &dev)
+            get_default = ctypes.WINFUNCTYPE(_HRESULT, c_void_p, ctypes.c_uint,
+                                             ctypes.c_uint, c_void_p)(enum_vtbl[4])
+            dev = c_void_p()
+            if get_default(ppv.value, 0, 1, byref(dev)) != 0 or not dev.value:
+                return None
+            try:
+                dev_vtbl = ctypes.cast(ctypes.cast(dev.value, POINTER(c_void_p)).contents.value,
+                                       POINTER(c_void_p))
+                # IMMDevice 槽位 5 = GetId(&pszId)
+                get_id = ctypes.WINFUNCTYPE(_HRESULT, c_void_p, c_void_p)(dev_vtbl[5])
+                id_ptr = c_void_p()
+                hr = get_id(dev.value, byref(id_ptr))
+                if hr != 0 or not id_ptr.value:
+                    return None
+                try:
+                    return ctypes.wstring_at(id_ptr.value) or None
+                finally:
+                    _ole32.CoTaskMemFree(id_ptr)
+            finally:
+                _com_release(dev)
+        finally:
+            _com_release(ppv)
+    except Exception:
+        return None
 
 
 class Spectrum(threading.Thread):
@@ -89,13 +159,22 @@ class Spectrum(threading.Thread):
         return (None, pyaudio.paContinue)
 
     def run(self):
-        """采集主循环：流失效（默认输出设备切换/拔设备）后自动重建跟随新设备；
-        面板隐藏时挂起（关闭流让系统正常睡眠），恢复后重建流。
+        """采集主循环：默认输出设备切换/流失效后自动重建跟随新设备；面板隐藏时
+        挂起（关闭流让系统正常睡眠），恢复后重建流。
 
+        设备切换后旧设备的 loopback 流仍为 active（只是收不到声音），靠
+        is_active() 检测不到——每 ~2s 比对默认设备 ID，变了就重建流。
         此前流一失效线程就静默退出，频谱从此冻结；错误路径也没有 terminate，
         泄漏 WASAPI/COM 资源。两条都在这一版修掉。
         """
         import pyaudiowpatch as pyaudio
+        try:
+            import comtypes
+            comtypes.CoInitialize()
+        except Exception:
+            pass
+        current_id = None
+        poll_n = 0
         while not self._stop.is_set():
             if self._paused.is_set():
                 self._stop.wait(0.5)  # 挂起态：不开设备
@@ -108,6 +187,7 @@ class Spectrum(threading.Thread):
                 self._channels = max(1, int(dev.get("maxInputChannels", 2)))
                 self._sr = int(dev.get("defaultSampleRate", 48000))
                 self._compute_bins()
+                current_id = _default_endpoint_id()
                 stream = p.open(format=pyaudio.paFloat32,
                                 channels=self._channels,
                                 rate=self._sr,
@@ -119,7 +199,11 @@ class Spectrum(threading.Thread):
                 self.err = None
                 while not self._stop.is_set() and not self._paused.is_set() and stream.is_active():
                     self._stop.wait(0.2)
-                # is_active 变 False：设备切换/失效 → 重建流跟随新设备
+                    poll_n += 1
+                    if poll_n % 10 == 0:  # ~2s 一次：默认输出设备切换 → 重建流
+                        now_id = _default_endpoint_id()
+                        if now_id and current_id and now_id != current_id:
+                            break
             except Exception as e:
                 self.err = str(e)
                 with self._lock:
