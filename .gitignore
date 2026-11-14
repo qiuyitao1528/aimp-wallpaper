@@ -11,3 +11,5 @@ installer-test.iss
 scripts/*.png
 scripts/*.img
 scripts/portable-config-backup*.json
+docs/MAINTENANCE.md
+docs/bug-audit*.md
