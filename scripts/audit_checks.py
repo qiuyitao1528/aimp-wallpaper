@@ -903,10 +903,50 @@ def c56():
     src = open("aimp_wallpaper/audio_spectrum.py", encoding="utf-8").read()
     assert "_default_endpoint_id" in src, "应直查默认渲染设备 ID"
     assert "now_id != current_id" in src, "设备 ID 变化应触发重建"
-    rid = sys.modules.get("aimp_wallpaper.audio_spectrum")
     from aimp_wallpaper.audio_spectrum import _default_endpoint_id  # noqa: E402
     rid = _default_endpoint_id()
     assert rid and rid.startswith("{"), f"真机应返回设备 ID，实际 {rid!r}"
+
+
+# ---- 57 封面四样式（矩形/圆形/黑胶/倾斜）渲染互异 ----
+def c57():
+    import hashlib as _h
+    import io as _io
+    from PIL import Image as _Image
+    from PIL import ImageDraw
+    d = os.path.join(TMP, "c57")
+    art = _Image.new("RGB", (600, 600))
+    dd = ImageDraw.Draw(art)
+    for y in range(600):
+        dd.line([(0, y), (600, y)], fill=(y % 255, 100, 200 - y % 200))
+    buf = _io.BytesIO()
+    art.save(buf, "PNG")
+    cover = buf.getvalue()
+    meta = {"title": "样式", "artist": "a", "album": "b", "filename": "a.flac",
+            "duration_ms": 100000, "samplerate": 44100, "file_size": 1000, "bit_rate": 100}
+    monitors = [{"id": "MONO", "w": 800, "h": 600, "left": 0, "top": 0}]
+
+    class FakeDW:
+        def SetWallpaper(self, mid, path):
+            return None
+
+        def GetPosition(self):
+            return 4
+
+    orig = wallpaper._get_wallpaper_com
+    wallpaper._get_wallpaper_com = lambda: FakeDW()
+    try:
+        hashes = {}
+        for st in ("rect", "circle", "vinyl", "tilt"):
+            cfg = dict(config.DEFAULTS)
+            cfg.update({"output_dir": os.path.join(d, st), "fade_native": False,
+                        "cover_style": st, "cover_shadow_alpha": 0})
+            os.makedirs(cfg["output_dir"], exist_ok=True)
+            paths = wallpaper.render_and_apply(cover, meta, cfg, monitors)
+            hashes[st] = _h.sha256(open(paths[0], "rb").read()).hexdigest()
+        assert len(set(hashes.values())) == 4, f"四种样式输出应互不相同：{hashes}"
+    finally:
+        wallpaper._get_wallpaper_com = orig
 
 
 # ---- 30(旧) 配置往返（回归护栏） ----
@@ -979,6 +1019,7 @@ for n, title, fn in [
     (54, "渲染确定性（相同输入相同输出）", c54),
     (55, "文字图层复用", c55),
     (56, "默认设备直查+切换重建流", c56),
+    (57, "封面四样式渲染互异", c57),
 ]:
     check(n, title, fn)
 

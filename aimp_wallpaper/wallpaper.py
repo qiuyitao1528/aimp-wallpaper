@@ -638,6 +638,21 @@ def _rounded(im: Image.Image, radius: int) -> Image.Image:
     return im
 
 
+def _perspective_coeffs(dst_quad, src_size):
+    """PIL PERSPECTIVE 逆映射系数：输出四角 dst_quad → 输入矩形 src_size。"""
+    w, h = src_size
+    src = ((0, 0), (w, 0), (w, h), (0, h))
+    A, B = [], []
+    for (dx, dy), (sx, sy) in zip(dst_quad, src):
+        A.append([dx, dy, 1, 0, 0, 0, -sx * dx, -sx * dy])
+        B.append(sx)
+        A.append([0, 0, 0, dx, dy, 1, -sy * dx, -sy * dy])
+        B.append(sy)
+    res = np.linalg.lstsq(np.array(A, dtype=np.float64),
+                          np.array(B, dtype=np.float64), rcond=None)[0]
+    return [float(v) for v in res]
+
+
 def _hex_rgb(value, default: tuple[int, int, int]) -> tuple[int, int, int]:
     """'#RRGGBB' → (r,g,b)；非法回退 default。"""
     try:
@@ -844,29 +859,88 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
             cover = cover.resize((max(1, int(iw * scale)), max(1, int(ih * scale))), Image.LANCZOS)
         cw, ch = cover.size
         cy = (h - ch) // 2 + int(cfg.get("cover_offset_y", 0) or 0)
-        cover_x = _anchor_cx(anchor, cx, max_w, cw)
+        style = cfg.get("cover_style", "rect")  # rect=圆角矩形 / circle=圆形 / vinyl=黑胶唱片 / tilt=倾斜立体
         rad = int(cfg.get("cover_radius", 0) or 0)
         if rad <= 0:  # 0=自动：沿用写死时代的短边/60
             rad = max(6, min(cw, ch) // 60)
         fg = cover.convert("RGBA")
         fg = _rounded(fg, rad)
+        tilt_quad = None
+        if style == "circle":
+            fg = _rounded(fg, min(cw, ch) // 2)  # 圆角拉满即圆形
+            rad = min(cw, ch) // 2
+        elif style == "vinyl":
+            # 黑胶唱片：圆盘直径 = 封面尺寸 × 1.38（不超槽高），封面作为圆心标签
+            D = min(int(max(cw, ch) * 1.38), max_h)
+            label_d = int(D * 0.60)
+            disc = Image.new("RGBA", (D, D), (0, 0, 0, 0))
+            dd = ImageDraw.Draw(disc)
+            dd.ellipse((0, 0, D - 1, D - 1), fill=(14, 14, 16, 255))
+            groove_step = max(3, D // 64)
+            for r in range(label_d // 2 + groove_step, int(D * 0.47), groove_step):
+                dd.ellipse((D // 2 - r, D // 2 - r, D // 2 + r - 1, D // 2 + r - 1),
+                           outline=(255, 255, 255, 16), width=1)
+            dd.arc((int(D * 0.06), int(D * 0.06), int(D * 0.94), int(D * 0.94)),
+                   190, 260, fill=(255, 255, 255, 46), width=max(2, D // 140))
+            disc.alpha_composite(
+                _rounded(cover.resize((label_d, label_d), Image.LANCZOS).convert("RGBA"), label_d // 2),
+                (D // 2 - label_d // 2, D // 2 - label_d // 2))
+            hole = max(3, int(D * 0.022))  # 中心孔透底
+            hole_mask = Image.new("L", (D, D), 0)
+            ImageDraw.Draw(hole_mask).ellipse((D // 2 - hole, D // 2 - hole,
+                                               D // 2 + hole, D // 2 + hole), fill=255)
+            disc.paste((0, 0, 0, 0), (0, 0), hole_mask)
+            dd.ellipse((D // 2 - hole * 2, D // 2 - hole * 2, D // 2 + hole * 2, D // 2 + hole * 2),
+                       outline=(0, 0, 0, 180), width=max(2, hole // 2))
+            fg = disc
+            cw = ch = D
+            rad = D // 2
+            cy = (h - D) // 2 + int(cfg.get("cover_offset_y", 0) or 0)
+            cover_x = _anchor_cx(anchor, cx, max_w, D)
+        elif style == "tilt":
+            # 倾斜立体：封面透视梯形（右缘稍短）+ 右侧厚度面（取封面右缘色压暗）
+            t = max(8, int(cw * 0.06))
+            h2 = int(ch * 0.78)
+            W2, H2 = cw + t, ch
+            cy0 = (ch - h2) // 2
+            quad = ((0, 0), (cw - t, cy0), (cw - t, cy0 + h2 - 1), (0, ch - 1))
+            canvas = Image.new("RGBA", (W2, H2), (0, 0, 0, 0))
+            edge = cover.crop((cover.width - max(2, cover.width // 20), 0,
+                               cover.width, cover.height)).resize((1, 1))
+            er, eg, eb = edge.getpixel((0, 0))
+            ImageDraw.Draw(canvas).polygon(
+                [(cw - t, cy0), (cw, cy0 - int(t * 0.4)),
+                 (cw, cy0 + h2 - 1 - int(t * 0.4)), (cw - t, cy0 + h2 - 1)],
+                fill=(int(er * 0.45), int(eg * 0.45), int(eb * 0.45), 255))
+            face = fg.transform((W2, H2), Image.PERSPECTIVE,
+                                _perspective_coeffs(quad, (cw - t, ch)), Image.BICUBIC)
+            canvas.alpha_composite(face)
+            fg = canvas
+            cw, ch = W2, H2
+            tilt_quad = quad
+        cover_x = _anchor_cx(anchor, cx, max_w, cw)
         sa = max(0, min(255, int(cfg.get("cover_shadow_alpha", 130) or 0)))
-        if sa:  # 投影在小尺寸上生成再放大（高斯很贵，1/3 尺寸视觉等效）
+        if sa:  # 统一投影：前景 alpha 轮廓（各样式通用），1/3 尺寸模糊再放大
             so = max(4, int(cfg.get("cover_shadow_offset", 40) or 40))
             k = 3
-            sw2, sh2 = max(8, (cw + 2 * so) // k), max(8, (ch + 2 * so) // k)
-            shadow = Image.new("RGBA", (sw2, sh2), (0, 0, 0, 0))
-            ImageDraw.Draw(shadow).rounded_rectangle(
-                [so // k, so // k, (cw + so) // k, (ch + so) // k],
-                radius=max(2, rad // k), fill=(0, 0, 0, sa))
+            small = fg.resize((max(2, fg.width // k), max(2, fg.height // k)), Image.BILINEAR)
+            sw2, sh2 = max(8, (fg.width + 2 * so) // k), max(8, (fg.height + 2 * so) // k)
+            shadow = Image.new("L", (sw2, sh2), 0)
+            shadow.paste(small.split()[3], (so // k, so // k))
             shadow = shadow.filter(ImageFilter.GaussianBlur(18 / k))
-            shadow = shadow.resize((cw + 2 * so, ch + 2 * so), Image.BILINEAR)
-            bg.alpha_composite(shadow, (cover_x - so, cy - so))
+            shadow_img = Image.new("RGBA", (sw2, sh2), (0, 0, 0, sa))
+            shadow_img.putalpha(shadow.point(lambda a: a * sa // 255))
+            shadow_img = shadow_img.resize((fg.width + 2 * so, fg.height + 2 * so), Image.BILINEAR)
+            bg.alpha_composite(shadow_img, (cover_x - so, cy - so))
         csw = max(0, min(8, int(cfg.get("cover_stroke_w", 0) or 0)))
-        if csw:  # 封面描边画在 fg 圆角边界上
+        if csw:  # 封面描边：矩形/圆形/黑胶走圆角框，倾斜立体描面轮廓
             csrgb = _hex_rgb(cfg.get("cover_stroke_color"), (0, 0, 0))
-            ImageDraw.Draw(fg).rounded_rectangle([0, 0, cw - 1, ch - 1], radius=rad,
-                                                 outline=(*csrgb, 255), width=csw)
+            df = ImageDraw.Draw(fg)
+            if style == "tilt" and tilt_quad:
+                df.line(list(tilt_quad) + [tilt_quad[0]], fill=(*csrgb, 255), width=csw, joint="curve")
+            else:
+                df.rounded_rectangle([0, 0, fg.width - 1, fg.height - 1], radius=rad,
+                                     outline=(*csrgb, 255), width=csw)
         bg.alpha_composite(fg, (cover_x, cy))
     else:
         ch = int(int(h * cfg["cover_height_ratio"]) *

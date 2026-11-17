@@ -38,6 +38,7 @@ DEFAULTS = {
     "theme_night_follow": False,  # 跟随系统日/夜主题（深色主题叠黑色遮罩）
     "night_overlay": 30,        # 夜间黑色遮罩浓度（%）
     "cover_height_ratio": 0.56, # 无封面占位框占屏高比例（内部几何，不暴露）
+    "cover_style": "rect",      # 封面显示样式 rect=圆角矩形 / circle=圆形 / vinyl=黑胶唱片 / tilt=倾斜立体
     "cover_margin_ratio": 0.12, # 封面左边距占屏高比例（GUI 可调）
     "cover_offset_x": 0,        # 封面 X 偏移(像素，可为负)
     "cover_offset_y": 0,        # 封面 Y 偏移(像素，可为负)

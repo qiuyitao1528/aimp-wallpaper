@@ -35,6 +35,7 @@ SHADOW_ALPHA_CHOICES = [0, 40, 70, 100, 130, 160, 200]
 PAUSE_MODE_ITEMS = [("关", "off"), ("压暗", "darken"), ("角标", "badge"), ("压暗+角标", "both")]
 PAUSE_SCOPE_ITEMS = [("整幅", "all"), ("仅背景", "bg")]
 COVER_ANCHOR_ITEMS = [("左侧", "left"), ("右侧", "right"), ("居中", "center"), ("居中·左到线", "center_bound")]
+COVER_STYLE_ITEMS = [("圆角矩形", "rect"), ("圆形", "circle"), ("黑胶唱片", "vinyl"), ("倾斜立体", "tilt")]
 OVERFLOW_ITEMS = [("换行", "wrap"), ("省略号", "ellipsis")]
 SPACE_WRAP_ITEMS = [("关", "0"), ("2", "2"), ("3", "3"), ("4", "4"),
                     ("5", "5"), ("6", "6"), ("8", "8"), ("10", "10")]
@@ -315,6 +316,8 @@ class SettingsWindow:
         cfg, pg = self.cfg, self._pages["封面"]
         self._two_col(pg)
         g_geo = self._group(pg, "大小与位置", col=0)
+        self.cover_style_var = self._add_labeled(g_geo, "封面样式", COVER_STYLE_ITEMS,
+                                                 cfg.get("cover_style", "rect"))
         self.cover_anchor_var = self._add_labeled(g_geo, "缩放基准", COVER_ANCHOR_ITEMS,
                                                   cfg.get("cover_anchor", "left"))
         self.cover_scale_var = self._add_combo(g_geo, "封面大小(倍率)", SCALE_CHOICES,
@@ -610,6 +613,7 @@ class SettingsWindow:
         self._int(self.pause_shrink_pct_var, "pause_shrink_pct", 0, 50, label="封面缩小幅度")
 
     def _save_cover(self):
+        self.cfg["cover_style"] = dict(COVER_STYLE_ITEMS).get(self.cover_style_var.get(), "rect")
         self.cfg["cover_anchor"] = dict(COVER_ANCHOR_ITEMS).get(self.cover_anchor_var.get(), "left")
         self._float(self.cover_scale_var, "cover_scale", 0.3, 2.0, label="封面大小")
         self._int(self.cover_dx_var, "cover_offset_x", -2000, 2000, label="封面 X 偏移")
