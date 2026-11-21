@@ -495,10 +495,10 @@ def c30():
 
 # ---- 31 IPC 所有消息带超时（此前同步 SendMessageW，AIMP 挂死=线程永久停摆） ----
 def c31():
-    import re
     src = open("aimp_wallpaper/aimp_api.py", encoding="utf-8").read()
-    bare = re.findall(r"SendMessageW\(", src.replace("SendMessageTimeoutW(", ""))
-    assert not bare, f"仍有 {len(bare)} 处无超时的裸 SendMessageW"
+    # 命令/通知（不取回值）必须带超时；属性 GET 取回值合法走 SendMessageW（见 #62）
+    assert "SendMessageW(self._aimp, WM_AIMP_COMMAND" not in src, "命令类消息不得用无超时 SendMessageW"
+    assert "_send_timeout(self._aimp, WM_AIMP_COMMAND" in src, "命令应走 _send_timeout"
 
 
 # ---- 32 异常封面不再让渲染死循环失败（DecompressionBomb 等全部兜住） ----
@@ -951,6 +951,29 @@ def c57():
         wallpaper._get_wallpaper_com = orig
 
 
+# ---- 61 属性 GET 与裸 SendMessageW 一致（SendMessageTimeoutW 拿不到 AIMP 回值） ----
+def c61():
+    from aimp_wallpaper.aimp_api import user32, AIMP_CLASS, WM_USER, AimpIPC, P_POSITION
+    user32.SendMessageW.restype = ctypes.c_ssize_t
+    hwnd = user32.FindWindowW(AIMP_CLASS, None)
+    if not hwnd:
+        print("    (AIMP 未运行，跳过对照)", flush=True)
+        return
+    ipc = AimpIPC()
+    ipc._aimp = hwnd
+    raw = user32.SendMessageW(hwnd, WM_USER + 0x77, P_POSITION, 0) & 0xFFFFFFFF
+    via = ipc._prop(P_POSITION)
+    assert via == raw, f"属性 GET 与裸查询不一致：raw={raw} via={via}"
+
+
+# ---- 62 属性 GET 走 SendMessageW（防 SendMessageTimeoutW 回值丢失回归） ----
+def c62():
+    src = open("aimp_wallpaper/aimp_api.py", encoding="utf-8").read()
+    prop_seg = src.split("def _prop", 1)[1].split("def _request_cover", 1)[0]
+    assert "user32.SendMessageW(self._aimp" in prop_seg, "_prop 必须用 SendMessageW 拿回值"
+    assert "SendMessageTimeoutW(self._aimp" not in prop_seg, "_prop 不得走 SendMessageTimeoutW（回值丢失）"
+
+
 # ---- 58 进度更新不受播放状态门控冻结（此前 state!=2 时 position 冻结 → 歌词卡第一行） ----
 def c58():
     node = func_ast("aimp_wallpaper/aimp_api.py", "_on_timer")
@@ -1065,6 +1088,8 @@ for n, title, fn in [
     (58, "进度更新不受播放状态门控冻结", c58),
     (59, "歌词行随播放位置推进（真实管线）", c59),
     (60, "parse_lrc 过滤空文本标记", c60),
+    (61, "属性 GET 与裸 SendMessageW 一致（真机对照）", c61),
+    (62, "属性 GET 走 SendMessageW（防回值丢失回归）", c62),
 ]:
     check(n, title, fn)
 

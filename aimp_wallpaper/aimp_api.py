@@ -285,7 +285,13 @@ class AimpIPC(threading.Thread):
             _send_timeout(self._aimp, WM_AIMP_COMMAND, n, 0)
 
     def _prop(self, pid) -> int:
-        return int(_send_timeout(self._aimp, WM_AIMP_PROPERTY, pid | 0, 0) & 0xFFFFFFFF)
+        """属性 GET：必须用 SendMessageW 拿回值——SendMessageTimeoutW 在 AIMP 上
+        拿不到属性值（真机实测恒返回 1，state/position/duration 全废，歌词卡第一行）。
+        挂死防护由 _on_timer 前置的 WM_NULL 探活承担：探活失败根本走不到这里。"""
+        if not self._aimp:
+            return 0
+        r = user32.SendMessageW(self._aimp, WM_AIMP_PROPERTY, pid, 0)
+        return int(r) & 0xFFFFFFFF
 
     def _request_cover(self):
         """换代后启动封面获取：延迟 300ms 首次请求（AIMP 常已就绪），2s 内每 500ms 快速重试，
