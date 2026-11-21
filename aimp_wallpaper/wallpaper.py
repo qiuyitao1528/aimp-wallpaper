@@ -898,25 +898,17 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
             cy = (h - D) // 2 + int(cfg.get("cover_offset_y", 0) or 0)
             cover_x = _anchor_cx(anchor, cx, max_w, D)
         elif style == "tilt":
-            # 倾斜立体：封面透视梯形（右缘稍短）+ 右侧厚度面（取封面右缘色压暗）
-            t = max(8, int(cw * 0.06))
+            # 倾斜立体：封面透视梯形（右缘稍短）。2× 超采样后 LANCZOS 缩回，
+            # 透视变换的边缘抗锯齿（此前右缘厚度面多边形画歪突出一块，已按反馈去掉）
+            SS = 2
             h2 = int(ch * 0.78)
-            W2, H2 = cw + t, ch
             cy0 = (ch - h2) // 2
-            quad = ((0, 0), (cw - t, cy0), (cw - t, cy0 + h2 - 1), (0, ch - 1))
-            canvas = Image.new("RGBA", (W2, H2), (0, 0, 0, 0))
-            edge = cover.crop((cover.width - max(2, cover.width // 20), 0,
-                               cover.width, cover.height)).resize((1, 1))
-            er, eg, eb = edge.getpixel((0, 0))
-            ImageDraw.Draw(canvas).polygon(
-                [(cw - t, cy0), (cw, cy0 - int(t * 0.4)),
-                 (cw, cy0 + h2 - 1 - int(t * 0.4)), (cw - t, cy0 + h2 - 1)],
-                fill=(int(er * 0.45), int(eg * 0.45), int(eb * 0.45), 255))
-            face = fg.transform((W2, H2), Image.PERSPECTIVE,
-                                _perspective_coeffs(quad, (cw - t, ch)), Image.BICUBIC)
-            canvas.alpha_composite(face)
-            fg = canvas
-            cw, ch = W2, H2
+            quad = ((0, 0), (cw, cy0), (cw, cy0 + h2 - 1), (0, ch - 1))
+            big = fg.resize((cw * SS, ch * SS), Image.LANCZOS)
+            coeffs = _perspective_coeffs(tuple((x * SS, y * SS) for x, y in quad),
+                                         (cw * SS, ch * SS))
+            face = big.transform((cw * SS, ch * SS), Image.PERSPECTIVE, coeffs, Image.BILINEAR)
+            fg = face.resize((cw, ch), Image.LANCZOS)
             tilt_quad = quad
         cover_x = _anchor_cx(anchor, cx, max_w, cw)
         sa = max(0, min(255, int(cfg.get("cover_shadow_alpha", 130) or 0)))
