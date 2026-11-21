@@ -14,7 +14,7 @@ import sys
 import time
 
 import numpy as np
-from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from . import applog, config
 
@@ -939,16 +939,6 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                 df.rounded_rectangle([0, 0, fg.width - 1, fg.height - 1], radius=rad,
                                      outline=(*csrgb, 255), width=csw)
         bg.alpha_composite(fg, (cover_x, cy))
-        if style == "tilt":  # 下方淡出的镜像倒影（Apple Music 观感的关键）
-            refl_h = int(ch * 0.35)
-            refl = fg.transpose(Image.FLIP_TOP_BOTTOM)
-            refl = refl.crop((0, 0, fg.width, refl_h)).resize((fg.width, refl_h), Image.BILINEAR)
-            grad = Image.new("L", (1, refl_h))
-            for y in range(refl_h):
-                grad.putpixel((0, y), int(150 * (1 - y / max(1, refl_h)) ** 1.4))
-            grad = grad.resize((fg.width, refl_h))
-            refl.putalpha(ImageChops.multiply(refl.split()[3], grad))
-            bg.alpha_composite(refl.filter(ImageFilter.GaussianBlur(2)), (cover_x, cy + ch))
     else:
         ch = int(int(h * cfg["cover_height_ratio"]) *
                  max(0.3, min(2.0, float(cfg.get("cover_scale", 1.0) or 1.0))))
