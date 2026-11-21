@@ -177,21 +177,9 @@ def _decode_uslt_body(raw: bytes) -> str | None:
     return text or None
 
 
-def _read_id3_lyrics(f) -> str | None:
-    """MP3/M4A 前部 ID3v2：找 USLT（unsigned lyrics）帧。
-
-    v2.3/v2.4 帧头 10 字节（USLT）；v2.2 帧头 6 字节且帧名是 3 字符的 ULT——
-    此前只按 10 字节头扫，v2.2 老文件的歌词永远读不到。
-    """
-    f.seek(0)
-    head = f.read(10)
-    if len(head) < 10 or head[:3] != b"ID3":
-        return None
-    major = head[3]
-    size = _synchsafe(head[6:10])
-    body = f.read(min(size, 8_000_000))
-    if major < 2:
-        return None
+def _scan_id3_frames(major: int, body: bytes) -> str | None:
+    """扫描 ID3v2 body 里的歌词帧：v2.3/v2.4 = USLT（10 字节帧头），
+    v2.2 = ULT（6 字节帧头）——此前只按 10 字节头扫，v2.2 老文件读不到。"""
     if major == 2:
         off = 0
         while off + 6 <= len(body):
@@ -220,6 +208,54 @@ def _read_id3_lyrics(f) -> str | None:
     return None
 
 
+def _decode_id3v2_tag(tag: bytes) -> str | None:
+    """完整 ID3v2 标签（含 10 字节头）→ 歌词；非 ID3 返回 None。"""
+    if len(tag) < 10 or tag[:3] != b"ID3":
+        return None
+    major = tag[3]
+    if major < 2:
+        return None
+    size = _synchsafe(tag[6:10])
+    return _scan_id3_frames(major, tag[10:10 + min(size, 8_000_000)])
+
+
+def _read_wav_lyrics(f) -> str | None:
+    """WAV：遍历 RIFF 块找 "ID3 " 块（foobar2000 等把歌词写在这种块里，
+    内含完整 ID3v2 标签）——此前 .wav 只走"文件头必须是 ID3"的 MP3 解析，
+    永远读不到。"""
+    f.seek(0)
+    head = f.read(12)
+    if len(head) < 12 or head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+        return None
+    pos, guard = 12, 0
+    while pos + 8 <= 64_000_000 and guard < 512:
+        guard += 1
+        f.seek(pos)
+        hdr = f.read(8)
+        if len(hdr) < 8:
+            return None
+        cid = hdr[:4]
+        size = int.from_bytes(hdr[4:8], "little")
+        if cid in (b"ID3 ", b"id3 "):
+            return _decode_id3v2_tag(f.read(min(size, 8_000_000)))
+        pos += 8 + size + (size & 1)  # RIFF 块按字对齐
+    return None
+
+
+def _read_id3_lyrics(f) -> str | None:
+    """MP3/M4A 前部 ID3v2：找 USLT（unsigned lyrics）帧。"""
+    f.seek(0)
+    head = f.read(10)
+    if len(head) < 10 or head[:3] != b"ID3":
+        return None
+    major = head[3]
+    if major < 2:
+        return None
+    size = _synchsafe(head[6:10])
+    body = f.read(min(size, 8_000_000))
+    return _scan_id3_frames(major, body)
+
+
 def _read_embedded_lyrics(audio_path: str, pref: str = "zh-Hans") -> str | None:
     """读音频文件内嵌歌词：FLAC(Vorbis COMMENT) → ID3v2 USLT。失败 None。"""
     if not audio_path or not os.path.isfile(audio_path):
@@ -229,7 +265,11 @@ def _read_embedded_lyrics(audio_path: str, pref: str = "zh-Hans") -> str | None:
             ext = os.path.splitext(audio_path)[1].lower()
             if ext == ".flac":
                 return _pick_lyrics(_read_flac_lyrics(f) or [], pref)
-            if ext in (".mp3", ".m4a", ".aac", ".wav", ".aiff"):
+            if ext == ".wav":
+                # RIFF 容器："ID3 " 块（foobar 风格）优先，再试文件头直挂的 ID3
+                got = _read_wav_lyrics(f)
+                return got if got else _read_id3_lyrics(f)
+            if ext in (".mp3", ".m4a", ".aac", ".aiff"):
                 return _read_id3_lyrics(f)
             # 其它容器（ape/ogg 等）先试 FLAC 结构再试 ID3
             picked = _pick_lyrics(_read_flac_lyrics(f) or [], pref)

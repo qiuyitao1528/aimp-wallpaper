@@ -17,6 +17,10 @@ import time
 import types
 
 sys.path.insert(0, ".")
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 TMP = tempfile.mkdtemp(prefix="aimpwp_audit_")
 
 from aimp_wallpaper import config, desktop, wallpaper  # noqa: E402
@@ -995,6 +999,32 @@ def c63():
     assert pair2 == ("新歌歌词", "", ""), f"切回有歌词应立即渲染：{pair2}"
 
 
+# ---- 64 WAV 内嵌歌词：RIFF "ID3 " 块可读（foobar2000 写法） ----
+def c64():
+    from aimp_wallpaper.lyrics import _read_embedded_lyrics  # noqa: E402
+
+    def sync4(n):
+        return bytes([(n >> 21) & 0x7F, (n >> 14) & 0x7F, (n >> 7) & 0x7F, n & 0x7F])
+
+    def riff_chunk(cid, data):
+        return cid + len(data).to_bytes(4, "little") + data + (b"\x00" if len(data) % 2 else b"")
+
+    uslt = bytes([1]) + b"eng" + b"\x00\x00" + "WAV 内嵌歌词".encode("utf-16")
+    frame = b"USLT" + sync4(len(uslt)) + b"\x00\x00" + uslt  # ID3v2.3 帧含 2 字节 flags
+    tag = b"ID3" + bytes([3, 0, 0]) + sync4(len(frame)) + frame
+    body = (b"WAVE"
+            + riff_chunk(b"fmt ", b"\x01\x00\x02\x00" + b"\x00" * 12)
+            + riff_chunk(b"data", b"\x00" * 64)
+            + riff_chunk(b"ID3 ", tag))
+    wav = b"RIFF" + len(body).to_bytes(4, "little") + body
+    d = os.path.join(TMP, "c64")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "song.wav")
+    open(p, "wb").write(wav)
+    got = _read_embedded_lyrics(p)
+    assert got and "WAV 内嵌歌词" in got, f"WAV RIFF ID3 块歌词应可读，实际 {got!r}"
+
+
 # ---- 58 进度更新不受播放状态门控冻结（此前 state!=2 时 position 冻结 → 歌词卡第一行） ----
 def c58():
     node = func_ast("aimp_wallpaper/aimp_api.py", "_on_timer")
@@ -1112,6 +1142,7 @@ for n, title, fn in [
     (61, "属性 GET 与裸 SendMessageW 一致（真机对照）", c61),
     (62, "属性 GET 走 SendMessageW（防回值丢失回归）", c62),
     (63, "切到无歌词歌曲后清空上一首歌词（防陈旧残留）", c63),
+    (64, "WAV 内嵌歌词（RIFF ID3 块）可读", c64),
 ]:
     check(n, title, fn)
 
