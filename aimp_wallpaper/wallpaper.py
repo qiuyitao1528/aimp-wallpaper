@@ -14,7 +14,7 @@ import sys
 import time
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from . import applog, config
 
@@ -898,16 +898,21 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
             cy = (h - D) // 2 + int(cfg.get("cover_offset_y", 0) or 0)
             cover_x = _anchor_cx(anchor, cx, max_w, D)
         elif style == "tilt":
-            # 倾斜立体：封面透视梯形（右缘稍短）。2× 超采样后 LANCZOS 缩回，
-            # 透视变换的边缘抗锯齿（此前右缘厚度面多边形画歪突出一块，已按反馈去掉）
+            # 倾斜立体（Apple Music 观感）：卡片绕纵轴后仰——面宽收窄 84%、
+            # 远缘高 80%、垂直居中，下方带淡出的镜像倒影。
+            # 2× 超采样后 LANCZOS 缩回：透视变换的边缘抗锯齿
             SS = 2
-            h2 = int(ch * 0.78)
+            fw = int(cw * 0.84)  # 面宽收窄：rotateY 时面在深度方向变短，左右不再拉长
+            h2 = int(ch * 0.80)
             cy0 = (ch - h2) // 2
-            quad = ((0, 0), (cw, cy0), (cw, cy0 + h2 - 1), (0, ch - 1))
+            quad = ((0, 0), (fw, cy0), (fw, cy0 + h2 - 1), (0, ch - 1))
             big = fg.resize((cw * SS, ch * SS), Image.LANCZOS)
             coeffs = _perspective_coeffs(tuple((x * SS, y * SS) for x, y in quad),
                                          (cw * SS, ch * SS))
-            face = big.transform((cw * SS, ch * SS), Image.PERSPECTIVE, coeffs, Image.BILINEAR)
+            face = big.transform((fw * SS, ch * SS), Image.PERSPECTIVE, coeffs, Image.BILINEAR)
+            fg = face.resize((fw, ch), Image.LANCZOS)
+            cw = fw
+            tilt_quad = quad
             fg = face.resize((cw, ch), Image.LANCZOS)
             tilt_quad = quad
         cover_x = _anchor_cx(anchor, cx, max_w, cw)
@@ -934,6 +939,16 @@ def render_poster(cover_bytes: bytes | None, meta: dict, w: int, h: int, cfg: di
                 df.rounded_rectangle([0, 0, fg.width - 1, fg.height - 1], radius=rad,
                                      outline=(*csrgb, 255), width=csw)
         bg.alpha_composite(fg, (cover_x, cy))
+        if style == "tilt":  # 下方淡出的镜像倒影（Apple Music 观感的关键）
+            refl_h = int(ch * 0.35)
+            refl = fg.transpose(Image.FLIP_TOP_BOTTOM)
+            refl = refl.crop((0, 0, fg.width, refl_h)).resize((fg.width, refl_h), Image.BILINEAR)
+            grad = Image.new("L", (1, refl_h))
+            for y in range(refl_h):
+                grad.putpixel((0, y), int(150 * (1 - y / max(1, refl_h)) ** 1.4))
+            grad = grad.resize((fg.width, refl_h))
+            refl.putalpha(ImageChops.multiply(refl.split()[3], grad))
+            bg.alpha_composite(refl.filter(ImageFilter.GaussianBlur(2)), (cover_x, cy + ch))
     else:
         ch = int(int(h * cfg["cover_height_ratio"]) *
                  max(0.3, min(2.0, float(cfg.get("cover_scale", 1.0) or 1.0))))
