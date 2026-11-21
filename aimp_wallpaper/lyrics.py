@@ -586,7 +586,10 @@ class LyricsWindow:
         # 兼容 (ms, 原文) 与 (ms, 原文, 翻译) 两种来源
         self.lines = [tuple(e) + ("",) * (3 - len(tuple(e))) for e in (lines or [])]
         self._times = [e[0] for e in self.lines]
-        self._line_idx = -1
+        # 强制下一拍重绘：切到无歌词的歌（lines=None）时 _line_idx 恰好仍是 -1，
+        # 若不置哨兵，_advance 判定"行没变"永不重绘 → 窗口停留在上一首的歌词
+        self._line_idx = None
+        self._shown_pair = None
 
     def _current_index(self, pos_ms: int) -> int:
         i = bisect.bisect_right(self._times, pos_ms) - 1

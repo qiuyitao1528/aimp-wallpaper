@@ -974,6 +974,26 @@ def c62():
     assert "SendMessageTimeoutW(self._aimp" not in prop_seg, "_prop 不得走 SendMessageTimeoutW（回值丢失）"
 
 
+# ---- 63 切到无歌词歌曲后清空上一首歌词（此前 _line_idx 恰为 -1 永不重绘，窗口残留旧词） ----
+def c63():
+    from aimp_wallpaper.lyrics import LyricsWindow, parse_lrc
+    lrc = parse_lrc("[00:10.00]旧歌词一\n[00:20.00]旧歌词二")
+    fake = types.SimpleNamespace(lines=[(ms, t, "") for ms, t in lrc],
+                                 _times=[ms for ms, _t in lrc], _line_idx=0,
+                                 _shown_pair=("旧歌词二", "", ""))
+    fake._current_index = types.MethodType(LyricsWindow._current_index, fake)
+    LyricsWindow.set_lines(fake, None)  # 切到没有歌词的歌
+    assert fake.lines == [] and fake._line_idx is None and fake._shown_pair is None, \
+        "set_lines(None) 应清空行表并强制重绘"
+    pair = LyricsWindow._advance(fake, 50000)
+    assert pair == ("", "", ""), f"下一拍应输出空内容（清屏），实际 {pair}"
+    # 再切回有歌词的歌：立即渲染当前位置的行
+    LyricsWindow.set_lines(fake, [(10000, "新歌歌词", "")])
+    assert fake._line_idx is None
+    pair2 = LyricsWindow._advance(fake, 15000)
+    assert pair2 == ("新歌歌词", "", ""), f"切回有歌词应立即渲染：{pair2}"
+
+
 # ---- 58 进度更新不受播放状态门控冻结（此前 state!=2 时 position 冻结 → 歌词卡第一行） ----
 def c58():
     node = func_ast("aimp_wallpaper/aimp_api.py", "_on_timer")
@@ -1090,6 +1110,7 @@ for n, title, fn in [
     (60, "parse_lrc 过滤空文本标记", c60),
     (61, "属性 GET 与裸 SendMessageW 一致（真机对照）", c61),
     (62, "属性 GET 走 SendMessageW（防回值丢失回归）", c62),
+    (63, "切到无歌词歌曲后清空上一首歌词（防陈旧残留）", c63),
 ]:
     check(n, title, fn)
 
