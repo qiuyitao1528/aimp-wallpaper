@@ -1025,6 +1025,31 @@ def c64():
     assert got and "WAV 内嵌歌词" in got, f"WAV RIFF ID3 块歌词应可读，实际 {got!r}"
 
 
+# ---- 65 特殊空格归一（NBSP/全角/细空格此前画成叉） ----
+def c65():
+    lines = ly.parse_lrc("[00:10.00]原文\u00a0and\u3000译文\u2009!")
+    assert len(lines) == 1, f"应出一条：{lines}"
+    t = lines[0][1]
+    assert "\u00a0" not in t and "\u3000" not in t and "\u2009" not in t, f"特殊空格应归一：{t!r}"
+    assert t == "原文 and 译文 !", f"空格应为 ASCII 空格：{t!r}"
+
+
+# ---- 66 译文容差配对：插入行/元数据排除/正常行距不误配 ----
+def c66():
+    a = ly.parse_lrc("[00:10.000]原文一\n[00:10.600]译文一\n[00:30.000]原文二")
+    p = ly._pair_lyrics(a)
+    assert p[0][2] == "译文一" and p[1][1] == "原文二", f"容差配对失败：{p}"
+    b = ly.parse_lrc("[00:10.000]作词 : 某某\n[00:10.300]作曲 : 某某\n[00:30.000]正文")
+    p2 = ly._pair_lyrics(b)
+    assert p2[0][2] == "" and p2[1][2] == "", f"元数据行不得参与配对：{p2}"
+    c = ly.parse_lrc("[00:10.000]第一句\n[00:11.000]第二句\n[00:30.000]第三句")
+    p3 = ly._pair_lyrics(c)
+    assert all(tr == "" for _m, _t, tr in p3), f"正常行距不得配对：{p3}"
+    e = ly.parse_lrc("[00:10.000]同 ms 原文\n[00:10.000]同 ms 译文")
+    p4 = ly._pair_lyrics(e)
+    assert p4[0][2] == "同 ms 译文", p4
+
+
 # ---- 58 进度更新不受播放状态门控冻结（此前 state!=2 时 position 冻结 → 歌词卡第一行） ----
 def c58():
     node = func_ast("aimp_wallpaper/aimp_api.py", "_on_timer")
@@ -1136,6 +1161,8 @@ for n, title, fn in [
     (55, "文字图层复用", c55),
     (56, "默认设备直查+切换重建流", c56),
     (57, "封面四样式渲染互异", c57),
+    (65, "特殊空格归一（NBSP/全角/细空格→ASCII）", c65),
+    (66, "译文容差配对+元数据排除", c66),
     (58, "进度更新不受播放状态门控冻结", c58),
     (59, "歌词行随播放位置推进（真实管线）", c59),
     (60, "parse_lrc 过滤空文本标记", c60),

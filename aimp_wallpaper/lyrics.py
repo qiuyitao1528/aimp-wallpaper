@@ -33,11 +33,26 @@ def _stamp_ms(minute: str, sec: str, frac: str | None, offset_ms: int = 0) -> in
     return int(minute) * 60_000 + int(sec) * 1000 + fr + offset_ms
 
 
+_SPACE_VARIANTS = {
+    "\u00a0": " ", "\u3000": " ", "\u2009": " ", "\u2007": " ", "\u202f": " ",
+    "\u2005": " ", "\u2006": " ", "\u2002": " ", "\u2003": " ", "\u2004": " ",
+    "\u2008": " ", "\u200a": " ", "\u200b": "",
+}
+
+
+def _normalize_spaces(text: str) -> str:
+    """特殊空格（NBSP/全角/细空格等）归一为 ASCII 空格——这些字符在歌词字体里
+    常缺字形，被画成叉（语料实测 2589 处细空格/905 处全角/358 处 NBSP）。"""
+    if not any(c in text for c in _SPACE_VARIANTS):
+        return text
+    return "".join(_SPACE_VARIANTS.get(ch, ch) for ch in text)
+
+
 def parse_lrc(text: str) -> list[tuple[int, str]]:
     """LRC → [(ms, 歌词)] 按 ms 排序；跳过 [ti:]/[ar:] 等元数据与空行。"""
     offset = 0
     out: list[tuple[int, str]] = []
-    for raw in text.splitlines():
+    for raw in _normalize_spaces(text).splitlines():
         line = raw.strip()
         if not line:
             continue
@@ -287,11 +302,31 @@ def _local_lrc_candidates(audio_path: str, title: str) -> list[str]:
     return cands
 
 
+_META_PREFIX = ("作词", "作詞", "作曲", "编曲", "編曲", "填词", "填詞",
+                "制作人", "製作人", "制作", "製作", "混音", "母带", "母帶",
+                "录音", "錄音", "录音师", "监制", "監製", "出品", "发行", "發行",
+                "统筹", "統籌", "工程师", "吉他", "贝斯", "貝斯", "鼓", "键盘", "鍵盤",
+                "弦乐", "弦樂", "和声", "和聲", "和音", "改编", "改編", "原曲",
+                "lyrics", "music by", "composed", "written by", "arranged",
+                "produced", "mixed by", "mastered by", "guitar", "bass", "drum",
+                "piano", "violin", "programming")
+
+
+def _meta_like(text: str) -> bool:
+    """行文本是否像作词/作曲等元数据行（这类行不能参与译文配对）。"""
+    t = text.strip().lower()
+    return t.startswith(_META_PREFIX)
+
+
 def _pair_lyrics(orig: list[tuple[int, str]], trans_lines: list[tuple[int, str]] | None = None):
     """合并原文/翻译 → [(ms, 原文, 翻译)]。
 
-    网易云：tlyric 按时间戳精确配对；本地双语 LRC：同时间戳连续双行（内容不同），
-    第二行视为翻译——完全相同的重复行是副歌回声，不吞（此前会被当翻译隐藏）。
+    - 网易云 tlyric：按时间戳精确配对
+    - 本地双语 LRC：同时间戳连续双行（内容不同），第二行视为翻译
+    - 译文带独立时间戳（与原文差 ≤1.2s 且"寄居"在原文与下一句之间）也能配对——
+      此前要求精确相等，译文时间戳稍差就配不上，被当成下一行显示，关不掉译文开关；
+      作词/作曲等元数据行排除，避免被误吞
+    - 完全相同的重复行是副歌回声，不吞
     """
     tmap: dict[int, str] = {}
     for ms, t in (trans_lines or []):
@@ -301,9 +336,19 @@ def _pair_lyrics(orig: list[tuple[int, str]], trans_lines: list[tuple[int, str]]
     while i < len(orig):
         ms, text = orig[i]
         tr = tmap.get(ms, "")
-        if not tr and i + 1 < len(orig) and orig[i + 1][0] == ms and orig[i + 1][1] != text:
+        if not tr and i + 1 < len(orig) and orig[i + 1][0] == ms \
+                and orig[i + 1][1] != text and not _meta_like(orig[i + 1][1]):
             tr = orig[i + 1][1]
             i += 1
+        elif not tr and i + 2 < len(orig):
+            # 容差配对：插入行距原文 ≤1.2s、与下一句的间隔更大、双方都非元数据
+            dt = orig[i + 1][0] - ms
+            nxt_gap = orig[i + 2][0] - orig[i + 1][0]
+            if 0 < dt <= 700 and nxt_gap > dt * 2 \
+                    and orig[i + 1][1] != text \
+                    and not _meta_like(orig[i + 1][1]) and not _meta_like(text):
+                tr = orig[i + 1][1]
+                i += 1
         out.append((ms, text, tr))
         i += 1
     return out
