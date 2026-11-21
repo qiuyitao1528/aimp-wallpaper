@@ -963,7 +963,8 @@ def c61():
     ipc._aimp = hwnd
     raw = user32.SendMessageW(hwnd, WM_USER + 0x77, P_POSITION, 0) & 0xFFFFFFFF
     via = ipc._prop(P_POSITION)
-    assert via == raw, f"属性 GET 与裸查询不一致：raw={raw} via={via}"
+    # 两次查询之间播放会自然推进，允许 ±1s 调度容差；回值丢失时相差可达数万 ms
+    assert abs(via - raw) <= 1000, f"属性 GET 与裸查询不一致：raw={raw} via={via}"
 
 
 # ---- 62 属性 GET 走 SendMessageW（防 SendMessageTimeoutW 回值丢失回归） ----
