@@ -49,6 +49,8 @@ def parse_lrc(text: str) -> list[tuple[int, str]]:
         if not stamps:
             continue  # [ti:]/[ar:] 等元数据行
         content = _WORDTAG.sub("", _STAMP.sub("", line, count=len(stamps))).strip()
+        if not content:
+            continue  # 空文本标记（如开头的 [00:00.00]）不产生空行——曾被感知为"歌词卡住"
         for minute, sec, frac in stamps:
             out.append((_stamp_ms(minute, sec, frac, offset), content))
     out.sort(key=lambda e: e[0])
@@ -678,6 +680,17 @@ class LyricsWindow:
             lines[-1] = wallpaper._ellipsis(self._draw, lines[-1], f, avail)
         return f, size, lines
 
+    def _advance(self, pos_ms: int):
+        """按播放位置推进当前行（供 _tick 与离线测试）。行未变化返回 None。"""
+        idx = self._current_index(pos_ms)
+        if idx == self._line_idx:
+            return None
+        self._line_idx = idx
+        cur = self.lines[idx][1] if 0 <= idx < len(self.lines) else ""
+        cur_tr = self.lines[idx][2] if 0 <= idx < len(self.lines) else ""
+        nxt = self.lines[idx + 1][1] if 0 <= idx + 1 < len(self.lines) else ""
+        return (cur, cur_tr, nxt)
+
     def _tick(self):
         try:
             if time.monotonic() - getattr(self, "_last_maint", 0) >= 1.0:
@@ -700,14 +713,9 @@ class LyricsWindow:
                 self._follow_anchor()
                 self._ensure_fonts()
                 snap = self.ipc.snapshot()
-                pos = snap["position_ms"] + 300  # 提前 300ms 切行，观感更跟手
-                idx = self._current_index(pos)
-                if idx != self._line_idx:
-                    self._line_idx = idx
-                    cur = self.lines[idx][1] if 0 <= idx < len(self.lines) else ""
-                    cur_tr = self.lines[idx][2] if 0 <= idx < len(self.lines) else ""
-                    nxt = self.lines[idx + 1][1] if 0 <= idx + 1 < len(self.lines) else ""
-                    self._render(cur, cur_tr, nxt)
+                pair = self._advance(snap["position_ms"] + 300)  # 提前 300ms 切行，观感更跟手
+                if pair is not None:
+                    self._render(*pair)
         except Exception:  # 任何异常都不能断掉 after 链（断了歌词窗就永久冻结）
             applog.log_exc("歌词 tick 异常:\n", *sys.exc_info())
         self.win.after(400, self._tick)

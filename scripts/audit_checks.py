@@ -845,8 +845,10 @@ def c50():
 
 # ---- 51 静止时跳过 position/duration 轮询（暂停/停止时进度静止） ----
 def c51():
-    node = func_ast("aimp_wallpaper/aimp_api.py", "_on_timer")
-    assert "STATE_PLAYING" in ast.dump(node), "静止时应跳过进度轮询"
+    src = open("aimp_wallpaper/aimp_api.py", encoding="utf-8").read()
+    seg = src.split("def _on_timer", 1)[1].split("def _on_track", 1)[0]
+    assert "STATE_PLAYING" not in seg, "_on_timer 不得按播放状态门控进度轮询（曾致歌词卡第一行）"
+    assert "_apply_progress" in seg, "进度写入应走可测的 _apply_progress"
 
 
 # ---- 52 背景缓存只留当前 1 张（4K 省 33MB、1080p 省 8MB，显示无差别） ----
@@ -949,6 +951,46 @@ def c57():
         wallpaper._get_wallpaper_com = orig
 
 
+# ---- 58 进度更新不受播放状态门控冻结（此前 state!=2 时 position 冻结 → 歌词卡第一行） ----
+def c58():
+    node = func_ast("aimp_wallpaper/aimp_api.py", "_on_timer")
+    assert "STATE_PLAYING" not in ast.dump(node), "_on_timer 不得按播放状态门控进度轮询"
+    from aimp_wallpaper.aimp_api import AimpIPC
+    ipc = AimpIPC()
+    ipc._apply_progress(2, 5000, 200000)   # 播放中
+    assert ipc.snapshot()["position_ms"] == 5000
+    ipc._apply_progress(1, 8000, 200000)   # 暂停：position 也必须如实写入
+    assert ipc.snapshot()["position_ms"] == 8000, "暂停时进度写入被门控冻结"
+
+
+# ---- 59 歌词行随播放位置推进（真实 parse_lrc 数据 + _advance 管线） ----
+def c59():
+    import types
+    from aimp_wallpaper.lyrics import LyricsWindow, parse_lrc
+    lrc = parse_lrc("[00:10.00]第一行\n[00:20.00]第二行\n[00:30.00]第三行")
+    fake = types.SimpleNamespace(lines=[(ms, t, "") for ms, t in lrc],
+                                 _times=[ms for ms, _t in lrc], _line_idx=-1)
+    fake._current_index = types.MethodType(LyricsWindow._current_index, fake)  # 绑定真实 bisect 逻辑
+    p0 = LyricsWindow._advance(fake, 5000)      # 第一行之前：idx=-1 与初始相同 → 无需重绘
+    assert p0 is None and fake._line_idx == -1, f"首行前应返回 None：{p0}"
+    p1 = LyricsWindow._advance(fake, 10500)     # 第一行区间
+    assert p1 == ("第一行", "", "第二行") and fake._line_idx == 0, p1
+    p2 = LyricsWindow._advance(fake, 20500)     # 第二行区间
+    assert p2 == ("第二行", "", "第三行") and fake._line_idx == 1, p2
+    p3 = LyricsWindow._advance(fake, 30500)     # 第三行（末行，无下一行）
+    assert p3 == ("第三行", "", "") and fake._line_idx == 2, p3
+    pb = LyricsWindow._advance(fake, 10500)     # 快退（seek 回退）应能回行
+    assert pb == ("第一行", "", "第二行") and fake._line_idx == 0, pb
+    p_same = LyricsWindow._advance(fake, 11000)  # 行未变化返回 None
+    assert p_same is None, "行未变化应返回 None"
+
+
+# ---- 60 parse_lrc 过滤空文本标记（开头的 [00:00.00] 空行曾造成"卡住"观感） ----
+def c60():
+    lines = ly.parse_lrc("[00:00.00]\n[00:10.00]hello\n[00:20.00]")
+    assert [t for _ms, t in lines] == ["hello"], f"空文本标记应被过滤：{lines}"
+
+
 # ---- 30(旧) 配置往返（回归护栏） ----
 def c30_cfg():
     p = os.path.join(TMP, "c30.json")
@@ -1013,13 +1055,16 @@ for n, title, fn in [
     (48, "配置并发写不互踩（唯一 tmp）", c48),
     (49, "SendMessageTimeoutW 回值 64 位声明", c49),
     (50, "播放/暂停状态通知即时唤醒 worker", c50),
-    (51, "静止时跳过进度轮询", c51),
+    (51, "进度轮询无条件（防歌词卡行回归）", c51),
     (52, "背景/封面缓存只留当前 1 张", c52),
     (53, "频谱静默帧跳过重绘", c53),
     (54, "渲染确定性（相同输入相同输出）", c54),
     (55, "文字图层复用", c55),
     (56, "默认设备直查+切换重建流", c56),
     (57, "封面四样式渲染互异", c57),
+    (58, "进度更新不受播放状态门控冻结", c58),
+    (59, "歌词行随播放位置推进（真实管线）", c59),
+    (60, "parse_lrc 过滤空文本标记", c60),
 ]:
     check(n, title, fn)
 

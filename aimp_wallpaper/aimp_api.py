@@ -446,18 +446,13 @@ class AimpIPC(threading.Thread):
             self._lose_aimp()  # AIMP 忙碌超 300ms ≠ 永久掉线：退泵重连
             return
         # 属性读取全部在锁外：此前有轮询在持锁状态下发 SendMessage，
-        # AIMP 挂死时锁被无限持有，snapshot() 的所有消费线程跟着死锁
+        # AIMP 挂死时锁被无限持有，snapshot() 的所有消费线程跟着死锁。
+        # 进度轮询必须无条件——曾按 state==PLAYING 门控过，AIMP 状态值在播放
+        # 时偶发非 2 导致 position 冻结在 0，歌词永久卡在第一行
         state = self._prop(P_STATE)
-        if state == STATE_PLAYING:
-            pos = self._prop(P_POSITION)
-            dur = self._prop(P_DURATION)
-        else:
-            pos = dur = None  # 暂停/停止时进度静止：省掉 2 次消息往返
-        with self._lock:
-            self._snap["state"] = state
-            if pos is not None:
-                self._snap["position_ms"] = pos
-                self._snap["duration_ms"] = dur
+        pos = self._prop(P_POSITION)
+        dur = self._prop(P_DURATION)
+        self._apply_progress(state, pos, dur)
         self._on_track()
         # 封面重试窗口：还没拿到（evt 未置位）就按节拍重试，超窗放弃
         if self._cover_retry_until:
@@ -470,6 +465,13 @@ class AimpIPC(threading.Thread):
                     self._cover_retry_until = 0.0
                 else:
                     self._try_cover_once()
+
+    def _apply_progress(self, state, pos, dur):
+        """写入状态与播放进度快照（独立方法：可离线测试，绝不发消息）。"""
+        with self._lock:
+            self._snap["state"] = state
+            self._snap["position_ms"] = pos
+            self._snap["duration_ms"] = dur
 
     def _drop_connection(self):
         if self._aimp and self._recv:
